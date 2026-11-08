@@ -2,11 +2,11 @@
 
 This folder is for the **independent AI-agent audits** (ADR-0020 decision 6): each audit is a
 separate agent run that did not write the contract, works against
-`nearpay-brain/lld/contracts-vault.md` (v1.4) V1–V10 and threat T-10, and records every finding
+`nearpay-brain/lld/contracts-vault.md` (v1.5) V1–V10 and threat T-10, and records every finding
 with its fix or an accepted-risk note. Audit reports go here as `YYYY-MM-DD-<auditor>.md`.
 Nothing in this file is an audit verdict.
 
-**Audits so far:** [`2026-11-08-ai-audits.md`](2026-11-08-ai-audits.md) — two AI audits, findings → fixes / accepted risks.
+**Audits so far:** [`2026-11-08-ai-audits.md`](2026-11-08-ai-audits.md) — two AI audits and a re-audit, findings → fixes / accepted risks.
 
 ## Scope
 
@@ -50,7 +50,8 @@ a token-ledger model, followed by a drain) and the fixed schedule
 | Callbacks are private, init once, collect non-payable, cancel/withdraw need 1 yocto | unit `callbacks_are_private`; sandbox `entry_point_guards` (wasm entry-point guards) |
 | Stable error strings and event wire format | unit `constants_match_lld`, `event_wire_format_is_exact`, exact-log assertions in `create_mandate_happy_path`, `top_up_rules`, `collect_success_with_fee`, `collect_merchant_leg_failure_restores_balance`, `cancel_by_payer_refunds_and_closes`, `cancel_refund_failure_leaves_balance_for_withdraw`; `every_error_string_is_reachable` |
 | Gas | sandbox `gas_profile` (burnt gas per method; `collect` ≤ 60 Tgas burnt excluding the receiver); `min_gas.rs` (every path at the minimum accepted gas, callbacks succeed, flags cleared); unit `audit_fixes::collect_gas_floor_and_static_budgets` |
-| Only directly signed deposits fund mandates (no relayed `sender_id = intents_account`) | unit `audit_fixes::relayed_deposit_from_intents_account_is_refunded`; sandbox `deposit_relayed_by_intents_account_is_refunded` |
+| Only directly signed deposits fund mandates (payer = transaction signer; no relayed `sender_id`) | unit `audit_fixes::relayed_deposit_from_intents_account_is_refunded`, `relayed_deposit_from_any_contract_is_refunded`; sandbox `deposit_relayed_by_intents_account_is_refunded` |
+| Exits need `MIN_EXIT_GAS` (clear `ERR_GAS` below) | unit `audit_fixes::exits_need_min_exit_gas`; sandbox `min_gas::closing_paths_at_minimum_gas_release_everything`, `vault_flows::entry_point_guards` |
 | Input bounds (int4/JS-safe numbers) | unit `audit_fixes::inputs_are_bounded`; `msg_fuzz` (`assert_validated`); cargo-fuzz |
 | Callback failure is unrecoverable (documented state) | unit `audit_fixes::failed_collect_callback_leaves_the_period_stuck`, `failed_refund_callback_blocks_withdraw_forever` |
 
