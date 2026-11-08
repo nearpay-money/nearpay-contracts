@@ -6,6 +6,7 @@
 //! object is leaked without flushing — i.e. a failed call has no effect, as on-chain. Logs and
 //! created receipts of each call are returned for inspection.
 
+mod audit_fixes;
 mod invariants;
 mod msg_fuzz;
 mod unit;
@@ -176,6 +177,8 @@ fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
 
 pub struct Sim {
     pub now: u64,
+    /// Prepaid gas of every call (Tgas).
+    pub gas_tgas: u64,
 }
 
 impl Sim {
@@ -192,7 +195,7 @@ impl Sim {
     /// No contract state yet.
     pub fn empty() -> Self {
         quiet_panics();
-        let s = Sim { now: T0 };
+        let s = Sim { now: T0, gas_tgas: 300 };
         s.install(VAULT, 0, vec![], HashMap::new());
         s
     }
@@ -204,7 +207,7 @@ impl Sim {
             .predecessor_account_id(acc(predecessor))
             .attached_deposit(yocto(deposit))
             .block_timestamp(self.now)
-            .prepaid_gas(Gas::from_tgas(300))
+            .prepaid_gas(Gas::from_tgas(self.gas_tgas))
             .account_balance(NearToken::from_near(1_000))
             .build()
     }

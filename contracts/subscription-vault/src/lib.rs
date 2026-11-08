@@ -39,18 +39,24 @@ pub const MANDATE_STORAGE_COST: NearToken = NearToken::from_millinear(10);
 pub const STORAGE_REGISTRATION_COST: NearToken = NearToken::from_millinear(2);
 
 /// Static gas for a NEP-141 `ft_transfer` (merchant NearAccount leg, fee leg, refunds).
-pub const GAS_FT_TRANSFER: Gas = Gas::from_tgas(8);
-/// Static gas for the merchant `ft_transfer_call` to `intents_account`. NEP-141 reference
-/// implementations (near-contract-standards ≤ 4.x, used by deployed tokens) require
-/// `prepaid_gas > 30 Tgas`; the rest is for the receiver's `ft_on_transfer`. Unused gas of the
-/// `collect` call is added on top by weight.
-pub const GAS_FT_TRANSFER_CALL: Gas = Gas::from_tgas(35);
+pub const GAS_FT_TRANSFER: Gas = Gas::from_tgas(15);
+/// Static gas for the merchant `ft_transfer_call` to `intents_account`. Deployed NEP-141 tokens
+/// (near-contract-standards 4.x logic) require `prepaid_gas > 30 Tgas` and forward exactly
+/// `prepaid − 30 Tgas` to the receiver, so `intents_account`'s `ft_on_transfer` is guaranteed
+/// ≥ 70 Tgas whoever calls `collect` (NEAR Intents recommends 100 Tgas for a whole deposit
+/// `ft_transfer_call`). Unused gas of `collect` is added on top by weight.
+pub const GAS_FT_TRANSFER_CALL: Gas = Gas::from_tgas(100);
 /// Static gas for `on_merchant_leg`: its own work plus scheduling the fee leg and `on_collected`.
-pub const GAS_ON_MERCHANT_LEG: Gas = Gas::from_tgas(35);
+pub const GAS_ON_MERCHANT_LEG: Gas = Gas::from_tgas(50);
 /// Static gas for `on_collected`.
-pub const GAS_ON_COLLECTED: Gas = Gas::from_tgas(10);
+pub const GAS_ON_COLLECTED: Gas = Gas::from_tgas(20);
 /// Static gas for `on_refunded`.
-pub const GAS_ON_REFUNDED: Gas = Gas::from_tgas(10);
+pub const GAS_ON_REFUNDED: Gas = Gas::from_tgas(20);
+/// Minimum gas attached to `collect` (`ERR_GAS` below it): the 150 Tgas of static gas for the
+/// merchant leg and `on_merchant_leg` plus 20 Tgas for `collect` itself. Permissionless callers
+/// cannot shrink the receiver's budget below `GAS_FT_TRANSFER_CALL − 30 Tgas`. The keeper attaches
+/// 250 Tgas (LLD v1.4 §3.3; unused gas is refunded).
+pub const MIN_COLLECT_GAS: Gas = Gas::from_tgas(170);
 
 /// Max bytes read from a token's promise result (`"340282366920938463463374607431768211455"`).
 const MAX_RESULT_LEN: usize = 64;
@@ -127,7 +133,10 @@ impl Vault {
             || max_fee_bps > 10_000
             || fee_receiver == me
             || intents_account == me
+            || fee_receiver == intents_account
             || allowed_tokens.contains(&me)
+            || allowed_tokens.contains(&fee_receiver)
+            || allowed_tokens.contains(&intents_account)
             || tvl_caps.len() != allowed_tokens.len()
         {
             fail(ERR_BAD_CONFIG);
@@ -143,10 +152,12 @@ impl Vault {
         let mut tvl = LookupMap::new(StorageKey::Tvl);
         for c in &tvl_caps {
             if !tokens.contains(&c.token)
+                || c.mandate_cap.0 == 0
                 || c.mandate_cap.0 > c.cap.0
                 || caps.insert(c.token.clone(), c.cap.0).is_some()
             {
-                // cap for an unknown token, mandate cap above the TVL cap, or two caps for a token
+                // cap for an unknown token, zero caps, mandate cap above the TVL cap, or two caps
+                // for one token (mandate_cap > 0 and mandate_cap ≤ cap imply cap > 0)
                 fail(ERR_BAD_CONFIG);
             }
             mandate_caps.insert(c.token.clone(), c.mandate_cap.0);
@@ -178,7 +189,13 @@ impl Vault {
         if !self.allowed_tokens.contains(&token) {
             fail(ERR_TOKEN_NOT_ALLOWED);
         }
-        let result = if amount.0 == 0 {
+        let result = if sender_id == self.intents_account || sender_id == env::current_account_id() {
+            // A deposit relayed by intents.near (Intents `ft_withdraw` with msg, 1Click
+            // `customRecipientMsg`) would make the relayer the payer: the human could never cancel
+            // and refunds would credit nobody (AI audits M-1/M-2). Only directly signed
+            // `ft_transfer_call`s fund mandates in v1.
+            Err(ERR_UNSUPPORTED_SENDER)
+        } else if amount.0 == 0 {
             Err(ERR_BAD_MSG)
         } else {
             match msg::parse_msg(&msg) {
@@ -200,10 +217,14 @@ impl Vault {
 
     /// Permissionless. Collects the next due period of an active mandate: merchant leg →
     /// (if fully delivered) fee leg → `on_collected`. Panics with a stable error string when the
-    /// period cannot be collected (checked in this order): `ERR_NOT_FOUND`, `ERR_MAX_PERIODS`
+    /// period cannot be collected (checked in this order): `ERR_GAS` (less than
+    /// `MIN_COLLECT_GAS` attached), `ERR_NOT_FOUND`, `ERR_MAX_PERIODS`
     /// (exhausted), `ERR_NOT_ACTIVE` (canceled), `ERR_IN_FLIGHT`, `ERR_MAX_PERIODS`,
     /// `ERR_NOT_DUE`, `ERR_INSUFFICIENT_BALANCE`.
     pub fn collect(&mut self, mandate_id: u64) -> Promise {
+        if env::prepaid_gas() < MIN_COLLECT_GAS {
+            fail(ERR_GAS);
+        }
         let now = env::block_timestamp();
         let m = self.mandates.get_mut(&mandate_id).unwrap_or_else(|| fail(ERR_NOT_FOUND));
         match m.status {
@@ -540,7 +561,7 @@ impl Vault {
         amount: u128,
         m: CreateMandateMsg,
     ) -> Result<(), &'static str> {
-        msg::validate_create(&m, self.max_fee_bps, &env::current_account_id())?;
+        msg::validate_create(&m, self.max_fee_bps, &env::current_account_id(), env::block_timestamp())?;
         let acct = self.storage_accounts.get(payer).ok_or(ERR_NO_STORAGE)?;
         if storage_available(acct) < MANDATE_STORAGE_COST.as_yoctonear() {
             return Err(ERR_NO_STORAGE);

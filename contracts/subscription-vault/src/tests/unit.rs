@@ -40,6 +40,8 @@ fn constants_match_lld() {
         "ERR_STILL_ACTIVE",
         "ERR_OPEN_MANDATES",
         "ERR_BAD_CONFIG",
+        "ERR_UNSUPPORTED_SENDER",
+        "ERR_GAS",
     ];
     assert_eq!(errors::ALL, names);
 }
@@ -144,6 +146,14 @@ fn new_rejects_bad_config() {
         Box::new(|c| c.tvl_caps[1].token = acc(USDC)), // two caps for one token
         Box::new(|c| c.max_fee_bps = 10_001),
         Box::new(|c| c.tvl_caps[0].mandate_cap = U128(CAP + 1)), // mandate cap above TVL cap
+        Box::new(|c| c.tvl_caps[0].mandate_cap = U128(0)),       // zero mandate cap
+        Box::new(|c| {
+            c.tvl_caps[0].mandate_cap = U128(0);
+            c.tvl_caps[0].cap = U128(0); // zero TVL cap
+        }),
+        Box::new(|c| c.fee_receiver = acc(INTENTS)),
+        Box::new(|c| c.fee_receiver = acc(USDC)),
+        Box::new(|c| c.intents_account = acc(USDT)),
         Box::new(|c| c.fee_receiver = acc(VAULT)),
         Box::new(|c| c.intents_account = acc(VAULT)),
         Box::new(|c| {
@@ -1168,6 +1178,11 @@ fn every_error_string_is_reachable() {
     s.collect_ok(id3);
     assert_eq!(s.collect(id3).err(), ERR_MAX_PERIODS);
     seen.push(ERR_MAX_PERIODS);
+    assert_eq!(log(&mut s, USDC, INTENTS, 1, &base), ERR_UNSUPPORTED_SENDER);
+    seen.push(ERR_UNSUPPORTED_SENDER);
+    s.gas_tgas = 100;
+    assert_eq!(s.collect(id).err(), ERR_GAS);
+    seen.push(ERR_GAS);
     let mut e = Sim::empty();
     let mut cfg = default_config();
     cfg.allowed_tokens.clear();

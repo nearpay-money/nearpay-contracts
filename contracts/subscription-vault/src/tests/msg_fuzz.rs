@@ -135,11 +135,13 @@ fn any_msg_value() -> impl Strategy<Value = Value> {
 
 fn assert_validated(m: &msg::CreateMandateMsg) {
     let vault = acc(VAULT);
-    match validate_create(m, MAX_FEE_BPS, &vault) {
+    match validate_create(m, MAX_FEE_BPS, &vault, T0) {
         Ok(()) => {
             assert!(m.amount_per_period.0 > 0);
-            assert!(m.period_secs >= msg::MIN_PERIOD_SECS);
+            assert!(m.period_secs >= msg::MIN_PERIOD_SECS && m.period_secs <= msg::MAX_PERIOD_SECS);
             assert_ne!(m.max_periods, Some(0));
+            assert!(m.max_periods.is_none_or(|n| n <= msg::MAX_MAX_PERIODS));
+            assert!(m.start_at.is_none_or(|t| t.0 <= T0 + msg::MAX_START_DELAY_NS));
             assert!(msg::ext_ref_is_valid(&m.ext_ref));
             assert_ne!(m.merchant_receiver, vault);
             assert!(m.fee_bps <= MAX_FEE_BPS);

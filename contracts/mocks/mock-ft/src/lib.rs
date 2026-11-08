@@ -1,14 +1,24 @@
 //! Test-only NEP-141 token built on `near-contract-standards`, with two additions for the vault
 //! integration tests:
-//! * `ft_transfer_call` requires `prepaid_gas > 30 Tgas`, as the near-contract-standards 4.x
-//!   implementation used by deployed tokens (USDC, USDT on NEAR) does, so the vault's gas
-//!   budget is exercised against the mainnet constraint;
+//! * `ft_transfer_call` behaves like the near-contract-standards 4.x implementation used by
+//!   deployed tokens (USDC, USDT on NEAR): it requires `prepaid_gas > 30 Tgas` and forwards
+//!   exactly `prepaid_gas − 30 Tgas` to the receiver's `ft_on_transfer` (static, no share of
+//!   unused gas), with 5 Tgas for `ft_resolve_transfer` — so the vault's gas budget is exercised
+//!   against the mainnet behaviour;
 //! * `mint` (unrestricted — this contract never leaves the sandbox).
 
+use near_contract_standards::fungible_token::receiver::ext_ft_receiver;
+use near_contract_standards::fungible_token::resolver::ext_ft_resolver;
 use near_contract_standards::fungible_token::{FungibleToken, FungibleTokenCore, FungibleTokenResolver};
 use near_contract_standards::storage_management::{StorageBalance, StorageBalanceBounds, StorageManagement};
 use near_sdk::json_types::U128;
-use near_sdk::{AccountId, Gas, NearToken, PanicOnDefault, PromiseOrValue, env, near, require};
+use near_sdk::{
+    AccountId, Gas, NearToken, PanicOnDefault, PromiseOrValue, assert_one_yocto, env, near, require,
+};
+
+/// near-contract-standards 4.x constants.
+const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas::from_tgas(5);
+const GAS_FOR_FT_TRANSFER_CALL: Gas = Gas::from_tgas(30);
 
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
@@ -44,8 +54,21 @@ impl FungibleTokenCore for MockFt {
         memo: Option<String>,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        require!(env::prepaid_gas() > Gas::from_tgas(30), "More gas is required");
-        self.token.ft_transfer_call(receiver_id, amount, memo, msg)
+        assert_one_yocto();
+        require!(env::prepaid_gas() > GAS_FOR_FT_TRANSFER_CALL, "More gas is required");
+        let sender_id = env::predecessor_account_id();
+        self.token.internal_transfer(&sender_id, &receiver_id, amount.0, memo);
+        ext_ft_receiver::ext(receiver_id.clone())
+            .with_static_gas(env::prepaid_gas().saturating_sub(GAS_FOR_FT_TRANSFER_CALL))
+            .with_unused_gas_weight(0)
+            .ft_on_transfer(sender_id.clone(), amount, msg)
+            .then(
+                ext_ft_resolver::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_RESOLVE_TRANSFER)
+                    .with_unused_gas_weight(0)
+                    .ft_resolve_transfer(sender_id, receiver_id, amount),
+            )
+            .into()
     }
 
     fn ft_total_supply(&self) -> U128 {

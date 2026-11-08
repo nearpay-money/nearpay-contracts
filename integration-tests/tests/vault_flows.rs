@@ -238,6 +238,34 @@ async fn mandate_cap_is_enforced() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn deposit_relayed_by_intents_account_is_refunded() -> anyhow::Result<()> {
+    // AI audits A1-M-2 / A2-M-1: intents.near as sender_id (Intents ft_withdraw with msg).
+    let ctx = setup(Setup::default()).await?;
+    ok(&ctx
+        .ft
+        .call("mint")
+        .args_json(json!({"account_id": ctx.intents.id(), "amount": MINTED.to_string()}))
+        .transact()
+        .await?)?;
+    let res = ctx
+        .bob
+        .call(ctx.vault.id(), "storage_deposit")
+        .args_json(json!({"account_id": ctx.intents.id()}))
+        .deposit(NearToken::from_millinear(12))
+        .transact()
+        .await?;
+    ok(&res)?;
+    let msg = create_msg(ctx.merchant.id(), "intents_account", AMOUNT, FEE_BPS, None);
+    let res = ft_transfer_call(&ctx.ft, ctx.intents.as_account(), ctx.vault.id(), 2 * AMOUNT, &msg).await?;
+    assert!(res.is_success(), "{res:?}");
+    assert!(res.logs().contains(&"ERR_UNSUPPORTED_SENDER"), "{:?}", res.logs());
+    assert!(vault_events(&res).is_empty());
+    assert_eq!(ft_balance(&ctx.ft, ctx.intents.id()).await?, MINTED);
+    assert_eq!(ft_balance(&ctx.ft, ctx.vault.id()).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn missing_storage_is_refunded() -> anyhow::Result<()> {
     let ctx = setup(Setup::default()).await?;
     // Bob holds tokens but never paid vault storage.
@@ -334,7 +362,9 @@ async fn under_gassed_collect_reverts_cleanly() -> anyhow::Result<()> {
     let ctx = setup(Setup::default()).await?;
     let (id, _) = create(&ctx, "intents_account", 2 * AMOUNT, None).await?;
     let res = collect(&ctx, id, Gas::from_tgas(40)).await?;
-    assert!(res.is_failure(), "{res:?}");
+    assert_fails_with(&res, "ERR_GAS");
+    let res = collect(&ctx, id, Gas::from_tgas(MIN_COLLECT_GAS.as_tgas() - 1)).await?;
+    assert_fails_with(&res, "ERR_GAS");
     let m = mandate(&ctx, id).await?;
     assert_eq!(m["in_flight"], false);
     assert_eq!(m["balance"], (2 * AMOUNT).to_string());

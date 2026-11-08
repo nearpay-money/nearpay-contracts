@@ -18,6 +18,12 @@ use near_sdk::{AccountId, serde_json};
 
 /// Minimum period (LLD §3: `period_secs < 86400` is rejected).
 pub const MIN_PERIOD_SECS: u64 = 86_400;
+/// Maximum period: 366 days (LLD v1.4 §3.1; keeps consumers' int4 columns safe).
+pub const MAX_PERIOD_SECS: u64 = 366 * 86_400;
+/// Maximum `max_periods`: 2^31 − 1 (fits int4; far below 2^53 for JS).
+pub const MAX_MAX_PERIODS: u32 = i32::MAX as u32;
+/// `start_at` may be at most this far in the future (ns): 366 days.
+pub const MAX_START_DELAY_NS: u64 = 366 * 86_400 * 1_000_000_000;
 /// Maximum `ext_ref` length in bytes (LLD §2).
 pub const MAX_EXT_REF_LEN: usize = 64;
 /// Upper bound on the `msg` length we try to parse (bytes). Longer messages are rejected
@@ -70,17 +76,22 @@ pub fn ext_ref_is_valid(ext_ref: &str) -> bool {
     ext_ref.len() <= MAX_EXT_REF_LEN && ext_ref.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
 
-/// Validates a `create_mandate` message against the contract configuration.
-/// Order (first failure wins): shape rules → `ERR_BAD_MSG`, then `fee_bps > max_fee_bps` →
-/// `ERR_FEE_TOO_HIGH`, then a zero merchant share → `ERR_BAD_MSG`.
+/// Validates a `create_mandate` message against the contract configuration at block time
+/// `now_ns`. Order (first failure wins): shape and range rules → `ERR_BAD_MSG`, then
+/// `fee_bps > max_fee_bps` → `ERR_FEE_TOO_HIGH`, then a zero merchant share → `ERR_BAD_MSG`.
 pub fn validate_create(
     m: &CreateMandateMsg,
     max_fee_bps: u16,
     vault: &AccountId,
+    now_ns: u64,
 ) -> Result<(), &'static str> {
+    let start_too_late = m.start_at.is_some_and(|s| s.0 > now_ns.saturating_add(MAX_START_DELAY_NS));
     if m.amount_per_period.0 == 0
         || m.period_secs < MIN_PERIOD_SECS
+        || m.period_secs > MAX_PERIOD_SECS
         || m.max_periods == Some(0)
+        || m.max_periods.is_some_and(|n| n > MAX_MAX_PERIODS)
+        || start_too_late
         || !ext_ref_is_valid(&m.ext_ref)
         || &m.merchant_receiver == vault
     {

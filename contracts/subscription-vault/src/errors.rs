@@ -41,6 +41,14 @@ pub const ERR_OPEN_MANDATES: &str = "ERR_OPEN_MANDATES";
 /// Invalid constructor arguments (deploy time only).
 pub const ERR_BAD_CONFIG: &str = "ERR_BAD_CONFIG";
 
+// Added in LLD v1.4 (AI audits 2026-11-08).
+
+/// `ft_on_transfer` whose `sender_id` is `intents_account` (a relayed deposit: the human payer
+/// would be unknown and refunds unattributable) or the vault itself. Refunded.
+pub const ERR_UNSUPPORTED_SENDER: &str = "ERR_UNSUPPORTED_SENDER";
+/// `collect` called with less than `MIN_COLLECT_GAS` attached (the keeper sees this one).
+pub const ERR_GAS: &str = "ERR_GAS";
+
 /// The stable code of a rejection log line: the text before the first `:` (LLD v1.3 §3.1 —
 /// consumers match the leading code; anything after `": "` is detail).
 pub fn code_of(line: &str) -> &str {
@@ -48,7 +56,7 @@ pub fn code_of(line: &str) -> &str {
 }
 
 /// Every error string the contract can emit, for tests and the audit index.
-pub const ALL: [&str; 15] = [
+pub const ALL: [&str; 17] = [
     ERR_NOT_FOUND,
     ERR_NOT_ACTIVE,
     ERR_NOT_DUE,
@@ -64,4 +72,6 @@ pub const ALL: [&str; 15] = [
     ERR_STILL_ACTIVE,
     ERR_OPEN_MANDATES,
     ERR_BAD_CONFIG,
+    ERR_UNSUPPORTED_SENDER,
+    ERR_GAS,
 ];

@@ -14,8 +14,10 @@ pub const FEE_BPS: u16 = 100;
 pub const MINTED: u128 = 1_000_000_000;
 pub const DEFAULT_CAP: u128 = 1_000_000_000_000;
 pub const DEFAULT_MANDATE_CAP: u128 = 100_000_000_000;
-/// Gas the keeper should attach to `collect` (LLD v1.2 §3.2).
-pub const COLLECT_GAS: Gas = Gas::from_tgas(150);
+/// Gas the keeper attaches to `collect` (LLD v1.4 §3.3).
+pub const COLLECT_GAS: Gas = Gas::from_tgas(250);
+/// Mirrors the contract's `MIN_COLLECT_GAS`.
+pub const MIN_COLLECT_GAS: Gas = Gas::from_tgas(170);
 
 pub fn wasm(name: &str) -> Result<Vec<u8>> {
     let dir = std::env::var("NEARPAY_WASM_DIR")
