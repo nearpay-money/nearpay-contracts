@@ -43,10 +43,12 @@ pub const ERR_BAD_CONFIG: &str = "ERR_BAD_CONFIG";
 
 // Added in LLD v1.4 (AI audits 2026-11-08).
 
-/// `ft_on_transfer` whose `sender_id` is `intents_account` (a relayed deposit: the human payer
-/// would be unknown and refunds unattributable) or the vault itself. Refunded.
+/// `ft_on_transfer` whose `sender_id` is not the transaction signer (a deposit relayed by a
+/// contract: the human payer would be unknown and refunds unattributable), is `intents_account`,
+/// or is the vault itself. Refunded.
 pub const ERR_UNSUPPORTED_SENDER: &str = "ERR_UNSUPPORTED_SENDER";
-/// `collect` called with less than `MIN_COLLECT_GAS` attached (the keeper sees this one).
+/// `collect` with less than `MIN_COLLECT_GAS`, or `cancel`/`withdraw` with less than
+/// `MIN_EXIT_GAS`, attached (the keeper sees the `collect` case).
 pub const ERR_GAS: &str = "ERR_GAS";
 
 /// The stable code of a rejection log line: the text before the first `:` (LLD v1.3 §3.1 —

@@ -148,6 +148,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # PR runs build the PR head commit (a real branch commit), not the ephemeral merge ref,
+          # so the embedded NEP-330 source link stays resolvable. Deploy only hashes from `push`
+          # runs on main (LLD §6, re-audit N-2).
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install Rust ${{ env.RUST_WASM_VERSION }} + wasm32
         run: |
           rustup toolchain install "$RUST_WASM_VERSION" --profile minimal --target wasm32-unknown-unknown
@@ -168,11 +173,17 @@ jobs:
           diff res-reproducible/SHA256SUMS "$NEARPAY_WASM_DIR/SHA256SUMS"
       - name: Hash
         run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            label="DEPLOYABLE — push run on main (record this hash with this run URL; LLD §6)"
+          else
+            label="NOT a deploy hash — ${GITHUB_EVENT_NAME} run (deploy only from a push run on main)"
+          fi
           {
-            echo "### Reproducible vault wasm (publish this hash with the CI run id; LLD §6)"
+            echo "### Reproducible vault wasm: ${label}"
             echo '```'
             ls -l res-reproducible/*.wasm
             cat res-reproducible/SHA256SUMS
+            echo "commit: $(git rev-parse HEAD)"
             echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -192,6 +203,8 @@ jobs:
         run: |
           rustup toolchain install "$FUZZ_NIGHTLY" --profile minimal
           cargo +"$FUZZ_NIGHTLY" install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+      - name: Fetch fuzz dependencies from the committed lockfile (fails on drift before running)
+        run: cargo +"$FUZZ_NIGHTLY" fetch --locked --manifest-path fuzz/Cargo.toml
       - name: Fuzz parse_msg (180 s)
         run: cargo +"$FUZZ_NIGHTLY" fuzz run --sanitizer none parse_msg -- -max_total_time=180 -max_len=4096
       - name: fuzz/Cargo.lock unchanged (committed dependency set)

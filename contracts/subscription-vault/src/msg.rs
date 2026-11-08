@@ -18,8 +18,9 @@ use near_sdk::{AccountId, serde_json};
 
 /// Minimum period (LLD §3: `period_secs < 86400` is rejected).
 pub const MIN_PERIOD_SECS: u64 = 86_400;
-/// Maximum period: 366 days (LLD v1.4 §3.1; keeps consumers' int4 columns safe).
-pub const MAX_PERIOD_SECS: u64 = 366 * 86_400;
+/// Maximum period: 12 × 366 days (LLD v1.5 §3.1): covers every billing price (`year × 12`) and
+/// stays below 2^31 − 1, so consumers' int4 columns and JS numbers are safe.
+pub const MAX_PERIOD_SECS: u64 = 12 * 366 * 86_400;
 /// Maximum `max_periods`: 2^31 − 1 (fits int4; far below 2^53 for JS).
 pub const MAX_MAX_PERIODS: u32 = i32::MAX as u32;
 /// `start_at` may be at most this far in the future (ns): 366 days.

@@ -85,6 +85,7 @@ async fn closing_paths_at_minimum_gas_release_everything() -> anyhow::Result<()>
             accepted = Some(tgas);
             break;
         }
+        assert_fails_with(&res, "ERR_GAS");
         let m = mandate(&ctx, id).await?;
         assert_eq!(
             (m["status"].as_str(), m["refund_in_flight"].as_str()),
@@ -93,7 +94,7 @@ async fn closing_paths_at_minimum_gas_release_everything() -> anyhow::Result<()>
         );
     }
     println!("GAS cancel minimum accepted: {accepted:?} Tgas");
-    assert!(accepted.is_some());
+    assert_eq!(accepted, Some(MIN_EXIT_GAS.as_tgas()), "cancel must work at exactly MIN_EXIT_GAS");
     assert!(mandate(&ctx, id).await?.is_null());
 
     // Withdraw of an exhausted mandate's leftover, at its minimum accepted gas.
@@ -115,10 +116,11 @@ async fn closing_paths_at_minimum_gas_release_everything() -> anyhow::Result<()>
             accepted = Some(tgas);
             break;
         }
+        assert_fails_with(&res, "ERR_GAS");
         assert_eq!(mandate(&ctx, id).await?["refund_in_flight"], "0", "{tgas}");
     }
     println!("GAS withdraw minimum accepted: {accepted:?} Tgas");
-    assert!(accepted.is_some());
+    assert_eq!(accepted, Some(MIN_EXIT_GAS.as_tgas()), "withdraw must work at exactly MIN_EXIT_GAS");
     assert!(mandate(&ctx, id).await?.is_null());
     let tvl: serde_json::Value =
         ctx.vault.view("get_token_tvl").args_json(json!({"token": ctx.ft.id()})).await?.json()?;

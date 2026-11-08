@@ -274,7 +274,7 @@ fn storage_cost_covers_worst_case_mandate() {
         with(create_msg(&merchant, "intents_account", AMOUNT, 100), "ext_ref", json!(long('x'))).to_string();
     let p = acc(&payer);
     let mandate_bytes = s
-        .call(&token, 0, vec![], move |v| {
+        .call_signed(&token, &payer, 0, vec![], move |v| {
             let before = env::storage_usage();
             assert_eq!(v.ft_on_transfer(p, U128(AMOUNT), msg).0, 0);
             v.mandates.flush();

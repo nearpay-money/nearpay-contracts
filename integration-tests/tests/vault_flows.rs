@@ -342,9 +342,24 @@ async fn entry_point_guards() -> anyhow::Result<()> {
         .transact()
         .await?;
     assert_fails_with(&res, "doesn't accept deposit");
-    let res =
-        ctx.alice.call(ctx.vault.id(), "cancel").args_json(json!({"mandate_id": id})).transact().await?;
+    let res = ctx
+        .alice
+        .call(ctx.vault.id(), "cancel")
+        .args_json(json!({"mandate_id": id}))
+        .gas(Gas::from_tgas(100))
+        .transact()
+        .await?;
     assert_fails_with(&res, "yoctoNEAR");
+    // A 30 Tgas tooling default gets a clear ERR_GAS (MIN_EXIT_GAS = 50 Tgas), not a gas panic.
+    let res = ctx
+        .alice
+        .call(ctx.vault.id(), "cancel")
+        .args_json(json!({"mandate_id": id}))
+        .deposit(NearToken::from_yoctonear(1))
+        .gas(Gas::from_tgas(30))
+        .transact()
+        .await?;
+    assert_fails_with(&res, "ERR_GAS");
     // No admin surface: these methods do not exist.
     for method in ["set_fee_receiver", "set_tvl_cap", "migrate", "upgrade", "owner_withdraw"] {
         let res = ctx.alice.call(ctx.vault.id(), method).args_json(json!({})).transact().await?;

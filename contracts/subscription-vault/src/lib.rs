@@ -53,10 +53,16 @@ pub const GAS_ON_COLLECTED: Gas = Gas::from_tgas(20);
 /// Static gas for `on_refunded`.
 pub const GAS_ON_REFUNDED: Gas = Gas::from_tgas(20);
 /// Minimum gas attached to `collect` (`ERR_GAS` below it): the 150 Tgas of static gas for the
-/// merchant leg and `on_merchant_leg` plus 20 Tgas for `collect` itself. Permissionless callers
-/// cannot shrink the receiver's budget below `GAS_FT_TRANSFER_CALL − 30 Tgas`. The keeper attaches
-/// 250 Tgas (LLD v1.4 §3.3; unused gas is refunded).
+/// merchant leg and `on_merchant_leg` plus 20 Tgas for `collect` itself. The static gas on each
+/// receipt is what guarantees the budgets (a receipt with less cannot be created, and the whole
+/// call reverts); the floor only turns an under-gassed call into a clear, early `ERR_GAS`. The
+/// keeper attaches 250 Tgas (LLD §3.3; unused gas is refunded; the protocol's prepaid-gas limit
+/// is 1 PGas since protocol 83, 300 Tgas before).
 pub const MIN_COLLECT_GAS: Gas = Gas::from_tgas(170);
+/// Minimum gas attached to `cancel` / `withdraw` (`ERR_GAS` below it): 35 Tgas of static gas for
+/// the refund transfer and `on_refunded` plus their own work (≈ 40 Tgas measured) with margin.
+/// Common tooling defaults to 30 Tgas; payers attach ≥ 50 Tgas (100 recommended) — LLD v1.5 §3.4.
+pub const MIN_EXIT_GAS: Gas = Gas::from_tgas(50);
 
 /// Max bytes read from a token's promise result (`"340282366920938463463374607431768211455"`).
 const MAX_RESULT_LEN: usize = 64;
@@ -189,11 +195,17 @@ impl Vault {
         if !self.allowed_tokens.contains(&token) {
             fail(ERR_TOKEN_NOT_ALLOWED);
         }
-        let result = if sender_id == self.intents_account || sender_id == env::current_account_id() {
-            // A deposit relayed by intents.near (Intents `ft_withdraw` with msg, 1Click
-            // `customRecipientMsg`) would make the relayer the payer: the human could never cancel
-            // and refunds would credit nobody (AI audits M-1/M-2). Only directly signed
-            // `ft_transfer_call`s fund mandates in v1.
+        let result = if sender_id == self.intents_account
+            || sender_id == env::current_account_id()
+            || sender_id != env::signer_account_id()
+        {
+            // The payer must be the account that signed the transaction (a direct
+            // `ft_transfer_call`, or a NEP-366 meta-transaction whose inner signer is the user), so
+            // the payer can always cancel and refunds reach a human. A deposit relayed by any
+            // contract — intents.near (Intents `ft_withdraw` with msg, 1Click
+            // `customRecipientMsg`), a bridge, a router, a smart wallet — would make the relayer
+            // the payer (AI audits A1-M-2, A2-M-1, re-audit N-1). The intents check is subsumed by
+            // the signer check but kept explicit. Smart-wallet payers are unsupported in v1.
             Err(ERR_UNSUPPORTED_SENDER)
         } else if amount.0 == 0 {
             Err(ERR_BAD_MSG)
@@ -322,12 +334,16 @@ impl Vault {
 
     // ------------------------------------------------------------------ exit
 
-    /// Payer or merchant receiver; requires exactly 1 yoctoNEAR (full-access key). Sets
+    /// Payer or merchant receiver; requires exactly 1 yoctoNEAR (full-access key) and at least
+    /// `MIN_EXIT_GAS` (50 Tgas; `ERR_GAS` below, checked first). Sets
     /// `canceled` and refunds the whole balance to the payer. The `canceled` event is emitted when
     /// the refund outcome is known (`refunded` = amount actually returned; on a failed refund the
     /// balance stays on the mandate for `withdraw`).
     #[payable]
     pub fn cancel(&mut self, mandate_id: u64) -> PromiseOrValue<bool> {
+        if env::prepaid_gas() < MIN_EXIT_GAS {
+            fail(ERR_GAS);
+        }
         assert_one_yocto();
         let caller = env::predecessor_account_id();
         let m = self.mandates.get_mut(&mandate_id).unwrap_or_else(|| fail(ERR_NOT_FOUND));
@@ -351,11 +367,15 @@ impl Vault {
         PromiseOrValue::Promise(Self::refund_promise(token, payer, mandate_id, refund, Some(caller)))
     }
 
-    /// Payer only; requires exactly 1 yoctoNEAR. Returns the balance of a `canceled` or
+    /// Payer only; requires exactly 1 yoctoNEAR and `MIN_EXIT_GAS` (`ERR_GAS`, checked first). Returns
+    /// the balance of a `canceled` or
     /// `exhausted` mandate. Errors: `ERR_NOT_FOUND`, `ERR_UNAUTHORIZED`, `ERR_STILL_ACTIVE`,
     /// `ERR_IN_FLIGHT` (a refund is pending), `ERR_INSUFFICIENT_BALANCE` (nothing to withdraw).
     #[payable]
     pub fn withdraw(&mut self, mandate_id: u64) -> Promise {
+        if env::prepaid_gas() < MIN_EXIT_GAS {
+            fail(ERR_GAS);
+        }
         assert_one_yocto();
         let caller = env::predecessor_account_id();
         let m = self.mandates.get_mut(&mandate_id).unwrap_or_else(|| fail(ERR_NOT_FOUND));

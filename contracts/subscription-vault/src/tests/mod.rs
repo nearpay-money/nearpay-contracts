@@ -200,10 +200,10 @@ impl Sim {
         s
     }
 
-    fn context(&self, predecessor: &str, deposit: u128) -> near_sdk::VMContext {
+    fn context_signed(&self, predecessor: &str, signer: &str, deposit: u128) -> near_sdk::VMContext {
         VMContextBuilder::new()
             .current_account_id(acc(VAULT))
-            .signer_account_id(acc(predecessor))
+            .signer_account_id(acc(signer))
             .predecessor_account_id(acc(predecessor))
             .attached_deposit(yocto(deposit))
             .block_timestamp(self.now)
@@ -219,8 +219,19 @@ impl Sim {
         results: Vec<PromiseResult>,
         storage: HashMap<Vec<u8>, Vec<u8>>,
     ) {
+        self.install_signed(predecessor, predecessor, deposit, results, storage)
+    }
+
+    fn install_signed(
+        &self,
+        predecessor: &str,
+        signer: &str,
+        deposit: u128,
+        results: Vec<PromiseResult>,
+        storage: HashMap<Vec<u8>, Vec<u8>>,
+    ) {
         env::set_blockchain_interface(MockedBlockchain::new(
-            self.context(predecessor, deposit),
+            self.context_signed(predecessor, signer, deposit),
             test_vm_config(),
             RuntimeFeesConfig::test(),
             results,
@@ -272,9 +283,22 @@ impl Sim {
         results: Vec<PromiseResult>,
         f: impl FnOnce(&mut Vault) -> R,
     ) -> Outcome<R> {
+        self.call_signed(predecessor, predecessor, deposit, results, f)
+    }
+
+    /// Like [`Sim::call`], with a transaction signer different from the predecessor (e.g. a
+    /// token contract calling `ft_on_transfer` in a transaction signed by the payer).
+    pub fn call_signed<R>(
+        &mut self,
+        predecessor: &str,
+        signer: &str,
+        deposit: u128,
+        results: Vec<PromiseResult>,
+        f: impl FnOnce(&mut Vault) -> R,
+    ) -> Outcome<R> {
         let storage = Self::take_storage();
         let snapshot = storage.clone();
-        self.install(predecessor, deposit, results, storage);
+        self.install_signed(predecessor, signer, deposit, results, storage);
         let mut v: Vault = env::state_read().expect("contract state");
         match catch_unwind(AssertUnwindSafe(|| f(&mut v))) {
             Ok(r) => {
@@ -302,11 +326,24 @@ impl Sim {
         self.call(who, amount, vec![], |v| v.storage_deposit(None, None)).unwrap()
     }
 
-    /// `ft_on_transfer` as called by `token`; returns (unused, logs).
+    /// `ft_on_transfer` as called by `token` in a transaction signed by `sender` (a direct
+    /// `ft_transfer_call`); returns the unused amount.
     pub fn ft_on_transfer(&mut self, token: &str, sender: &str, amount: u128, msg: &str) -> Outcome<u128> {
+        self.ft_on_transfer_signed(token, sender, sender, amount, msg)
+    }
+
+    /// `ft_on_transfer` with an explicit transaction signer (relayed deposits).
+    pub fn ft_on_transfer_signed(
+        &mut self,
+        token: &str,
+        sender: &str,
+        signer: &str,
+        amount: u128,
+        msg: &str,
+    ) -> Outcome<u128> {
         let msg = msg.to_string();
-        let sender = acc(sender);
-        self.call(token, 0, vec![], move |v| v.ft_on_transfer(sender, U128(amount), msg).0)
+        let sender_id = acc(sender);
+        self.call_signed(token, signer, 0, vec![], move |v| v.ft_on_transfer(sender_id, U128(amount), msg).0)
     }
 
     /// Registers `payer` for one more mandate and creates it; returns the id.

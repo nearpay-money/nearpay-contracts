@@ -49,9 +49,19 @@ scripts/build.sh --reproducible                       # Docker; the deployable v
 ```
 `PROPTEST_CASES` scales the property tests (CI: 256).
 
+## Calling the vault (gas and signers)
+
+| Method | Who | Attach |
+|---|---|---|
+| `ft_transfer_call(vault, amount, msg)` on the token | the payer, **signing directly** (the payer must be the transaction signer; deposits relayed by a contract — intents.near, bridges, routers, smart wallets — are refunded with `ERR_UNSUPPORTED_SENDER`) | 1 yoctoNEAR, ≥ 100 Tgas |
+| `collect(mandate_id)` | anyone (the billing keeper) | **250 Tgas** (minimum 170 Tgas, else `ERR_GAS`; unused gas is refunded) |
+| `cancel(mandate_id)` / `withdraw(mandate_id)` | payer (cancel: or merchant) | 1 yoctoNEAR and **≥ 50 Tgas, 100 recommended** — many tools default to 30 Tgas, which fails with `ERR_GAS` |
+
+Details: `nearpay-brain/lld/contracts-vault.md` §3.1, §3.3, §3.4.
+
 ## Status
 
-Stage 4 step 4.1: subscription vault implemented per LLD v1.4 (AI audits 2026-11-08 folded in: `audits/2026-11-08-ai-audits.md`) with unit, property, fuzz and sandbox tests; awaiting CI and the independent AI-agent audits (ADR-0020). Not deployed.
+Stage 4 step 4.1: subscription vault implemented per LLD v1.5 (AI audits and re-audit of 2026-11-08 folded in: `audits/2026-11-08-ai-audits.md`) with unit, property, fuzz and sandbox tests; awaiting CI and the independent AI-agent audits (ADR-0020). Not deployed.
 
 ## Built with
 

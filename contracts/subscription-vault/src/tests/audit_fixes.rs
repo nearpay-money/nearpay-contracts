@@ -53,12 +53,13 @@ fn rejected(s: &mut Sim, msg: &Value) -> bool {
 #[test]
 fn inputs_are_bounded() {
     let mut s = Sim::new();
-    s.register(ALICE, REG + 10 * MCOST);
+    s.register(ALICE, REG + 12 * MCOST);
     let base = create_msg(MERCHANT, "near_account", AMOUNT, 0);
 
-    // period_secs ≤ 366 days
-    assert!(!rejected(&mut s, &with(base.clone(), "period_secs", json!(366 * DAY_S))));
-    assert!(rejected(&mut s, &with(base.clone(), "period_secs", json!(366 * DAY_S + 1))));
+    // period_secs ≤ 12 × 366 days (v1.5, re-audit N-3: every billing price up to year × 12)
+    assert!(!rejected(&mut s, &with(base.clone(), "period_secs", json!(366 * DAY_S + 1))));
+    assert!(!rejected(&mut s, &with(base.clone(), "period_secs", json!(12 * 366 * DAY_S))));
+    assert!(rejected(&mut s, &with(base.clone(), "period_secs", json!(12 * 366 * DAY_S + 1))));
     assert!(rejected(&mut s, &with(base.clone(), "period_secs", json!(i32::MAX as u64 + 1)))); // audit PoC
     assert!(rejected(&mut s, &with(base.clone(), "period_secs", json!((1u64 << 60) + 1))));
 
@@ -99,8 +100,14 @@ fn collect_gas_floor_and_static_budgets() {
             >= GAS_FT_TRANSFER.as_gas() + GAS_ON_COLLECTED.as_gas() + Gas::from_tgas(15).as_gas()
     );
     assert!(GAS_ON_COLLECTED >= Gas::from_tgas(20) && GAS_ON_REFUNDED >= Gas::from_tgas(20));
-    // Keeper gas (LLD v1.4 §3.3) fits the 300 Tgas per-call limit with margin over the floor.
+    // Keeper gas (LLD §3.3) has margin over the floor and fits even the pre-protocol-83 prepaid-gas
+    // limit of 300 Tgas (1 PGas since protocol 83).
     assert!(Gas::from_tgas(250) >= MIN_COLLECT_GAS && Gas::from_tgas(250) <= Gas::from_tgas(300));
+    // Exits: refund transfer + on_refunded static gas, with ≥ 15 Tgas for the method itself.
+    assert!(
+        MIN_EXIT_GAS.as_gas()
+            >= GAS_FT_TRANSFER.as_gas() + GAS_ON_REFUNDED.as_gas() + Gas::from_tgas(15).as_gas()
+    );
 
     let mut s = Sim::new();
     let id = s.create_default();
@@ -225,4 +232,79 @@ fn payer_signed_fee_is_a_mandate_term() {
     let evs = s.collect_ok(id);
     assert_eq!(evs[0]["data"][0]["fee"], "0");
     assert_eq!(evs[0]["data"][0]["merchant_share"], AMOUNT.to_string());
+}
+
+// ------------------------------------------------------------------ re-audit (audit 3)
+
+const BRIDGE: &str = "bridge.test"; // any relaying contract other than intents_account
+
+/// N-1 (re-audit PoC `poc_other_relayer_still_becomes_payer`, inverted): the payer must be the
+/// transaction signer, so no relaying contract (bridge, router, smart wallet) can become payer.
+#[test]
+fn relayed_deposit_from_any_contract_is_refunded() {
+    let mut s = Sim::new();
+    s.call(MALLORY, REG + MCOST, vec![], |v| v.storage_deposit(Some(acc(BRIDGE)), None)).unwrap();
+    let msg = create_msg(MERCHANT, "intents_account", AMOUNT, 100).to_string();
+    // Alice signs a transaction in which bridge.test calls the token's ft_transfer_call.
+    let o = s.ft_on_transfer_signed(USDC, BRIDGE, ALICE, 3 * AMOUNT, &msg);
+    assert_eq!(o.result, Ok(3 * AMOUNT), "full refund");
+    assert_eq!(o.logs, vec![ERR_UNSUPPORTED_SENDER.to_string()]);
+    assert_eq!(s.view(|v| v.next_id), 0);
+    // Same for top-ups of an existing mandate.
+    let id = s.create_default();
+    let top = json!({"top_up": {"mandate_id": id}}).to_string();
+    let o = s.ft_on_transfer_signed(USDC, ALICE, MALLORY, AMOUNT, &top);
+    assert_eq!(o.logs, vec![ERR_UNSUPPORTED_SENDER.to_string()]);
+    // intents.near relaying a user's Intents withdrawal (signer = the user) is refused too, and so
+    // is intents.near signing itself (the explicit check).
+    assert_eq!(
+        s.ft_on_transfer_signed(USDC, INTENTS, ALICE, AMOUNT, &msg).logs,
+        vec![ERR_UNSUPPORTED_SENDER.to_string()]
+    );
+    assert_eq!(
+        s.ft_on_transfer_signed(USDC, INTENTS, INTENTS, AMOUNT, &msg).logs,
+        vec![ERR_UNSUPPORTED_SENDER.to_string()]
+    );
+    // A direct ft_transfer_call (signer = sender) still works.
+    assert_eq!(s.ft_on_transfer(USDC, ALICE, AMOUNT, &top).result, Ok(0));
+}
+
+/// N-3 (re-audit PoC `poc_multi_year_price_is_refused_although_int4_safe`, inverted): a 2-year
+/// price is accepted and collects once per 2 years.
+#[test]
+fn multi_year_period_is_accepted_and_collects_on_schedule() {
+    let mut s = Sim::new();
+    let two_years =
+        with(create_msg(MERCHANT, "intents_account", AMOUNT, 100), "period_secs", json!(730 * DAY_S));
+    let id = s.create(ALICE, 2 * AMOUNT, &two_years);
+    assert!(12 * 366 * DAY_S < i32::MAX as u64);
+    assert_eq!(s.collect_ok(id)[0]["data"][0]["period"], 1);
+    s.now = T0 + 730 * DAY_NS - 1;
+    assert_eq!(s.collect(id).err(), ERR_NOT_DUE);
+    s.now = T0 + 730 * DAY_NS;
+    assert_eq!(s.collect_ok(id)[0]["data"][0]["period"], 2);
+    assert_eq!(s.mandate(id).unwrap().next_collect_at, Some(U64(T0 + 2 * 730 * DAY_NS)));
+}
+
+/// N-4: exits below `MIN_EXIT_GAS` fail early with `ERR_GAS` (not "Exceeded the prepaid gas"),
+/// with no state change. (Success at exactly the floor is asserted in the sandbox,
+/// `min_gas.rs`: the native harness uses test fees, far above mainnet's.)
+#[test]
+fn exits_need_min_exit_gas() {
+    let mut s = Sim::new();
+    let id = s.create_default();
+    s.gas_tgas = 30; // common tooling default
+    assert_eq!(s.cancel(ALICE, id).err(), ERR_GAS);
+    s.gas_tgas = MIN_EXIT_GAS.as_tgas() - 1;
+    assert_eq!(s.cancel(ALICE, id).err(), ERR_GAS);
+    assert_eq!(s.mandate(id).unwrap().status, Status::Active);
+    s.gas_tgas = 300;
+    s.cancel(ALICE, id).unwrap();
+    s.on_refunded(id, 3 * AMOUNT, Some(ALICE), failed()).unwrap();
+    s.gas_tgas = MIN_EXIT_GAS.as_tgas() - 1;
+    assert_eq!(s.withdraw(ALICE, id).err(), ERR_GAS);
+    s.gas_tgas = 300;
+    assert_eq!(s.mandate(id).unwrap().refund_in_flight, U128(0));
+    s.withdraw(ALICE, id).unwrap();
+    assert_eq!(s.mandate(id).unwrap().refund_in_flight, U128(3 * AMOUNT));
 }
