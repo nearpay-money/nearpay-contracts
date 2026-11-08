@@ -2,6 +2,9 @@
 resolver = "3"
 members = [
     "contracts/subscription-vault",
+    "contracts/mocks/mock-ft",
+    "contracts/mocks/mock-intents",
+    "integration-tests",
 ]
 # cargo-fuzz target: built only by CI (nightly), see fuzz/Cargo.toml.
 exclude = ["fuzz"]
