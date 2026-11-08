@@ -78,12 +78,15 @@ pub struct StorageAccount {
     pub mandates: u32,
 }
 
-/// Per-token TVL cap, a constructor argument.
+/// Per-token caps, a constructor argument: `cap` bounds the token's TVL (Σ held for all its
+/// mandates), `mandate_cap` bounds one mandate (its balance after any deposit, and its
+/// `amount_per_period`). `mandate_cap ≤ cap`.
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TokenCap {
     pub token: AccountId,
     pub cap: U128,
+    pub mandate_cap: U128,
 }
 
 /// NEP-145 `StorageBalance`.
@@ -134,6 +137,8 @@ pub struct ConfigView {
     pub max_fee_bps: u16,
     pub intents_account: AccountId,
     pub min_period_secs: u64,
+    /// Per-token TVL and per-mandate caps, in `allowed_tokens` order.
+    pub caps: Vec<TokenCap>,
     pub mandate_storage_cost: U128,
     pub storage_registration_cost: U128,
 }
@@ -145,4 +150,5 @@ pub struct TokenTvlView {
     pub token: AccountId,
     pub tvl: U128,
     pub cap: U128,
+    pub mandate_cap: U128,
 }

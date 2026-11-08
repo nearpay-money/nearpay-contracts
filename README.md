@@ -51,7 +51,7 @@ scripts/build.sh --reproducible                       # Docker; the deployable v
 
 ## Status
 
-Stage 4 step 4.1: subscription vault implemented per LLD v1.2 with unit, property, fuzz and sandbox tests; awaiting CI and the independent AI-agent audits (ADR-0020). Not deployed.
+Stage 4 step 4.1: subscription vault implemented per LLD v1.3 with unit, property, fuzz and sandbox tests; awaiting CI and the independent AI-agent audits (ADR-0020). Not deployed.
 
 ## Built with
 

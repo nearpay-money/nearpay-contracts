@@ -1,6 +1,6 @@
 //! NearPay subscription vault (`v1.vault.nearpay.near`).
 //!
-//! Implementation spec: `nearpay-brain/lld/contracts-vault.md` (v1.2). ADR-0008.
+//! Implementation spec: `nearpay-brain/lld/contracts-vault.md` (v1.3). ADR-0008.
 //!
 //! * Payers fund mandates with `ft_transfer_call(vault, amount, msg = {"create_mandate": …})`
 //!   and top them up the same way (`{"top_up": …}`).
@@ -63,6 +63,7 @@ enum StorageKey {
     AllowedTokens,
     TvlCap,
     Tvl,
+    MandateCap,
     StorageAccounts,
     PayerIndex,
     PayerMandates { payer_hash: [u8; 32] },
@@ -93,6 +94,9 @@ pub struct Vault {
     fee_receiver: AccountId,
     max_fee_bps: u16,
     tvl_cap: LookupMap<AccountId, u128>,
+    /// Per token: max tokens one mandate may hold (balance after a deposit) and max
+    /// `amount_per_period` (ADR-0008 per-mandate cap; LLD v1.3).
+    mandate_cap: LookupMap<AccountId, u128>,
     /// Per token: Σ `Mandate::held()` — tokens the vault holds on behalf of mandates.
     tvl: LookupMap<AccountId, u128>,
     intents_account: AccountId,
@@ -135,11 +139,17 @@ impl Vault {
             }
         }
         let mut caps = LookupMap::new(StorageKey::TvlCap);
+        let mut mandate_caps = LookupMap::new(StorageKey::MandateCap);
         let mut tvl = LookupMap::new(StorageKey::Tvl);
         for c in &tvl_caps {
-            if !tokens.contains(&c.token) || caps.insert(c.token.clone(), c.cap.0).is_some() {
-                fail(ERR_BAD_CONFIG); // cap for an unknown token, or two caps for one token
+            if !tokens.contains(&c.token)
+                || c.mandate_cap.0 > c.cap.0
+                || caps.insert(c.token.clone(), c.cap.0).is_some()
+            {
+                // cap for an unknown token, mandate cap above the TVL cap, or two caps for a token
+                fail(ERR_BAD_CONFIG);
             }
+            mandate_caps.insert(c.token.clone(), c.mandate_cap.0);
             tvl.insert(c.token.clone(), 0u128);
         }
         Self {
@@ -149,6 +159,7 @@ impl Vault {
             fee_receiver,
             max_fee_bps,
             tvl_cap: caps,
+            mandate_cap: mandate_caps,
             tvl,
             intents_account,
             storage_accounts: LookupMap::new(StorageKey::StorageAccounts),
@@ -159,8 +170,9 @@ impl Vault {
     // ------------------------------------------------------------------ funding
 
     /// NEP-141 receiver. Creates or tops up a mandate. Returns the unused amount: `0` when
-    /// accepted, the full `amount` when rejected (the rejection reason is logged as one of the
-    /// stable error strings). Calls from a token outside `allowed_tokens` panic.
+    /// accepted, the full `amount` when rejected (the rejection is logged as one line starting
+    /// with a stable error string, e.g. `ERR_BAD_MSG` or `ERR_CAP_EXCEEDED: mandate`). Calls from
+    /// a token outside `allowed_tokens` panic.
     pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> U128 {
         let token = env::predecessor_account_id();
         if !self.allowed_tokens.contains(&token) {
@@ -496,6 +508,15 @@ impl Vault {
             max_fee_bps: self.max_fee_bps,
             intents_account: self.intents_account.clone(),
             min_period_secs: msg::MIN_PERIOD_SECS,
+            caps: self
+                .allowed_tokens
+                .iter()
+                .map(|t| TokenCap {
+                    token: t.clone(),
+                    cap: U128(self.tvl_cap.get(t).copied().unwrap_or(0)),
+                    mandate_cap: U128(self.mandate_cap.get(t).copied().unwrap_or(0)),
+                })
+                .collect(),
             mandate_storage_cost: U128(MANDATE_STORAGE_COST.as_yoctonear()),
             storage_registration_cost: U128(STORAGE_REGISTRATION_COST.as_yoctonear()),
         }
@@ -504,7 +525,8 @@ impl Vault {
     pub fn get_token_tvl(&self, token: AccountId) -> Option<TokenTvlView> {
         let cap = *self.tvl_cap.get(&token)?;
         let tvl = self.tvl.get(&token).copied().unwrap_or(0);
-        Some(TokenTvlView { token, tvl: U128(tvl), cap: U128(cap) })
+        let mandate_cap = self.mandate_cap.get(&token).copied().unwrap_or(0);
+        Some(TokenTvlView { token, tvl: U128(tvl), cap: U128(cap), mandate_cap: U128(mandate_cap) })
     }
 }
 
@@ -522,6 +544,10 @@ impl Vault {
         let acct = self.storage_accounts.get(payer).ok_or(ERR_NO_STORAGE)?;
         if storage_available(acct) < MANDATE_STORAGE_COST.as_yoctonear() {
             return Err(ERR_NO_STORAGE);
+        }
+        let mandate_cap = self.mandate_cap_of(token);
+        if m.amount_per_period.0 > mandate_cap || amount > mandate_cap {
+            return Err(LOG_CAP_EXCEEDED_MANDATE);
         }
         let new_tvl = self.tvl_after_deposit(token, amount)?;
         // ---- all checks passed: mutate
@@ -590,7 +616,13 @@ impl Vault {
         if m.status != Status::Active {
             return Err(ERR_NOT_ACTIVE);
         }
-        let new_balance = m.balance.checked_add(amount).ok_or(ERR_CAP_EXCEEDED)?;
+        // Per-mandate cap on what the mandate holds after the deposit (an in-flight collect or
+        // refund still counts: it may be credited back).
+        let held_after = m.held().checked_add(amount).ok_or(LOG_CAP_EXCEEDED_MANDATE)?;
+        if held_after > self.mandate_cap_of(token) {
+            return Err(LOG_CAP_EXCEEDED_MANDATE);
+        }
+        let new_balance = m.balance + amount; // ≤ held_after, no overflow
         let new_tvl = self.tvl_after_deposit(token, amount)?;
         // ---- all checks passed: mutate
         self.tvl.insert(token.clone(), new_tvl);
@@ -606,8 +638,12 @@ impl Vault {
         let tvl = self.tvl.get(token).copied().unwrap_or(0);
         match tvl.checked_add(amount) {
             Some(t) if t <= cap => Ok(t),
-            _ => Err(ERR_CAP_EXCEEDED),
+            _ => Err(LOG_CAP_EXCEEDED_TVL),
         }
+    }
+
+    fn mandate_cap_of(&self, token: &AccountId) -> u128 {
+        self.mandate_cap.get(token).copied().unwrap_or(0)
     }
 
     /// Settles an in-flight collect. `used` = merchant share actually delivered (capped at the

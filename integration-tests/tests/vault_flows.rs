@@ -198,26 +198,42 @@ async fn fee_leg_failure_keeps_fee_on_mandate() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn cap_exceeded_is_refunded() -> anyhow::Result<()> {
-    let ctx = setup(Setup { cap: 5 * AMOUNT, ..Setup::default() }).await?;
+    let ctx = setup(Setup { cap: 5 * AMOUNT, mandate_cap: 3 * AMOUNT, ..Setup::default() }).await?;
+    let (_, _) = create(&ctx, "intents_account", 3 * AMOUNT, None).await?;
+    let before = ft_balance(&ctx.ft, ctx.alice.id()).await?;
+    // A second mandate within its own cap would take the TVL to 6 > 5 periods.
     let msg = create_msg(ctx.merchant.id(), "intents_account", AMOUNT, FEE_BPS, None);
-    let res = ft_transfer_call(&ctx.ft, &ctx.alice, ctx.vault.id(), 6 * AMOUNT, &msg).await?;
+    let res = ft_transfer_call(&ctx.ft, &ctx.alice, ctx.vault.id(), 3 * AMOUNT, &msg).await?;
     assert!(res.is_success(), "{res:?}");
-    assert!(res.logs().contains(&"ERR_CAP_EXCEEDED"), "{:?}", res.logs());
+    assert!(res.logs().contains(&"ERR_CAP_EXCEEDED: tvl"), "{:?}", res.logs());
+    assert!(has_code(&res, "ERR_CAP_EXCEEDED"));
     assert_eq!(res.json::<String>()?, "0", "ft_transfer_call reports 0 used");
-    assert_eq!(ft_balance(&ctx.ft, ctx.alice.id()).await?, MINTED);
-    assert_eq!(ft_balance(&ctx.ft, ctx.vault.id()).await?, 0);
-    // Exactly the cap is accepted; one more unit is not (top-up).
-    let (id, _) = create(&ctx, "intents_account", 5 * AMOUNT, None).await?;
-    let res = ft_transfer_call(
-        &ctx.ft,
-        &ctx.alice,
-        ctx.vault.id(),
-        1,
-        &json!({"top_up": {"mandate_id": id}}).to_string(),
-    )
-    .await?;
-    assert!(res.logs().contains(&"ERR_CAP_EXCEEDED"));
+    assert_eq!(ft_balance(&ctx.ft, ctx.alice.id()).await?, before);
+    assert_eq!(ft_balance(&ctx.ft, ctx.vault.id()).await?, 3 * AMOUNT);
+    // Exactly the TVL cap is accepted.
+    let (_, _) = create(&ctx, "intents_account", 2 * AMOUNT, None).await?;
     assert_eq!(ft_balance(&ctx.ft, ctx.vault.id()).await?, 5 * AMOUNT);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mandate_cap_is_enforced() -> anyhow::Result<()> {
+    let ctx = setup(Setup { mandate_cap: 3 * AMOUNT, ..Setup::default() }).await?;
+    let msg = create_msg(ctx.merchant.id(), "intents_account", AMOUNT, FEE_BPS, None);
+    let res = ft_transfer_call(&ctx.ft, &ctx.alice, ctx.vault.id(), 3 * AMOUNT + 1, &msg).await?;
+    assert!(res.logs().contains(&"ERR_CAP_EXCEEDED: mandate"), "{:?}", res.logs());
+    assert_eq!(ft_balance(&ctx.ft, ctx.alice.id()).await?, MINTED);
+    let big = create_msg(ctx.merchant.id(), "intents_account", 3 * AMOUNT + 1, FEE_BPS, None);
+    let res = ft_transfer_call(&ctx.ft, &ctx.alice, ctx.vault.id(), AMOUNT, &big).await?;
+    assert!(res.logs().contains(&"ERR_CAP_EXCEEDED: mandate"), "{:?}", res.logs());
+    let (id, _) = create(&ctx, "intents_account", 2 * AMOUNT, None).await?;
+    let top = json!({"top_up": {"mandate_id": id}}).to_string();
+    let res = ft_transfer_call(&ctx.ft, &ctx.alice, ctx.vault.id(), AMOUNT + 1, &top).await?;
+    assert!(res.logs().contains(&"ERR_CAP_EXCEEDED: mandate"), "{:?}", res.logs());
+    ok(&ft_transfer_call(&ctx.ft, &ctx.alice, ctx.vault.id(), AMOUNT, &top).await?)?;
+    assert_eq!(mandate(&ctx, id).await?["balance"], (3 * AMOUNT).to_string());
+    let cfg: serde_json::Value = ctx.vault.view("get_config").await?.json()?;
+    assert_eq!(cfg["caps"][0]["mandate_cap"], (3 * AMOUNT).to_string());
     Ok(())
 }
 
@@ -284,7 +300,7 @@ async fn entry_point_guards() -> anyhow::Result<()> {
         .vault
         .call("new")
         .args_json(json!({"allowed_tokens": [ctx.other_ft.id()], "fee_receiver": ctx.bob.id(), "max_fee_bps": 10000,
-                          "tvl_caps": [{"token": ctx.other_ft.id(), "cap": "1"}], "intents_account": ctx.bob.id()}))
+                          "tvl_caps": [{"token": ctx.other_ft.id(), "cap": "1", "mandate_cap": "1"}], "intents_account": ctx.bob.id()}))
         .transact()
         .await?;
     assert!(res.is_failure(), "re-init must fail: {res:?}");

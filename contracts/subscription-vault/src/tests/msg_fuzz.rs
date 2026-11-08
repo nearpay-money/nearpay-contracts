@@ -207,7 +207,7 @@ proptest! {
             }
         } else {
             prop_assert_eq!(unused, amount);
-            prop_assert!(errors::ALL.contains(&o.logs[0].as_str()), "{:?}", o.logs);
+            prop_assert!(errors::ALL.contains(&errors::code_of(&o.logs[0])), "{:?}", o.logs);
             prop_assert_eq!(s.tvl(USDC), tvl_before);
         }
     }

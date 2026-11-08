@@ -19,6 +19,8 @@
 //! * V7  tvl ≤ cap for every token.
 //! * V8  storage: each payer's locked mandate count == its open mandates == its index entries.
 //! * V9  collect succeeds iff its preconditions hold, and fails with the documented error.
+//! * V10 (LLD v1.3) per mandate: balance + in-flight collect + in-flight refund ≤ the token's
+//!   per-mandate cap, and amount_per_period ≤ that cap.
 
 use super::*;
 use proptest::prelude::*;
@@ -28,6 +30,7 @@ const PAYERS: [&str; 3] = [ALICE, BOB, "carol.test"];
 const MERCHANTS: [&str; 2] = [MERCHANT, "shop.test"];
 const TOKENS: [&str; 2] = [USDC, USDT];
 const PROP_CAP: u128 = 60 * AMOUNT;
+const PROP_MANDATE_CAP: u128 = 6 * AMOUNT;
 const REG_Y: u128 = 2 * MILLINEAR;
 const MCOST_Y: u128 = 10 * MILLINEAR;
 
@@ -87,7 +90,8 @@ enum Op {
     },
 }
 
-const AMOUNTS: [u128; 5] = [1, 7, 999_999, AMOUNT, 3_333_333];
+// 7 × AMOUNT exceeds the per-mandate cap (amount_per_period rejection).
+const AMOUNTS: [u128; 6] = [1, 7, 999_999, AMOUNT, 3_333_333, 7 * AMOUNT];
 
 fn leg() -> impl Strategy<Value = Leg> {
     prop_oneof![
@@ -176,7 +180,10 @@ struct Model {
 
 fn config() -> Config {
     let mut c = default_config();
-    c.tvl_caps = TOKENS.iter().map(|t| TokenCap { token: acc(t), cap: U128(PROP_CAP) }).collect();
+    c.tvl_caps = TOKENS
+        .iter()
+        .map(|t| TokenCap { token: acc(t), cap: U128(PROP_CAP), mandate_cap: U128(PROP_MANDATE_CAP) })
+        .collect();
     c
 }
 
@@ -276,7 +283,7 @@ impl Model {
                 } else {
                     assert_eq!(unused, funding);
                     assert_eq!(o.logs.len(), 1);
-                    assert!(errors::ALL.contains(&o.logs[0].as_str()), "{:?}", o.logs);
+                    assert!(errors::ALL.contains(&errors::code_of(&o.logs[0])), "{:?}", o.logs);
                 }
             }
             Op::TopUp { sender, mandate, token, amount } => {
@@ -579,6 +586,12 @@ impl Model {
                         );
                     }
                     let in_flight_amt = if m.in_flight { m.amount_per_period.0 } else { 0 };
+                    // V10
+                    assert!(
+                        m.balance.0 + in_flight_amt + m.refund_in_flight.0 <= PROP_MANDATE_CAP,
+                        "V10 held {id}"
+                    );
+                    assert!(m.amount_per_period.0 <= PROP_MANDATE_CAP, "V10 amount {id}");
                     *held.entry(m.token.to_string()).or_default() +=
                         m.balance.0 + in_flight_amt + m.refund_in_flight.0;
                     // Per-mandate conservation while open.

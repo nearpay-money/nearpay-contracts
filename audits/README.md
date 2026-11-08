@@ -2,7 +2,7 @@
 
 This folder is for the **independent AI-agent audits** (ADR-0020 decision 6): each audit is a
 separate agent run that did not write the contract, works against
-`nearpay-brain/lld/contracts-vault.md` (v1.2) V1–V9 and threat T-10, and records every finding
+`nearpay-brain/lld/contracts-vault.md` (v1.3) V1–V10 and threat T-10, and records every finding
 with its fix or an accepted-risk note. Audit reports go here as `YYYY-MM-DD-<auditor>.md`.
 Nothing in this file is an audit verdict.
 
@@ -32,8 +32,9 @@ a token-ledger model, followed by a drain) and the fixed schedule
 | **V4** recipients | tokens only to payer, merchant receiver (direct, or `intents_account` with `msg` = merchant) or fee receiver; NEAR only to the storage account owner | P (every created receipt is decoded and its receiver/args asserted per context); unit `collect_intents_receipts`, `collect_near_account_receipts`, `collect_success_with_fee`, `cancel_by_payer_refunds_and_closes`, `cancel_by_merchant_refunds_payer`, `storage_*`; sandbox `entry_point_guards` (no admin/setter/upgrade methods exist) |
 | **V5** immutability | merchant receiver, kind, token, payer, amount, period, start, max periods, fee bps, ext_ref never change; no setters | P (`check` compares terms with the creation snapshot); sandbox `entry_point_guards` (config unchanged, re-init fails) |
 | **V6** flight flags | `in_flight` ⇔ one collect awaiting callbacks; `refund_in_flight` = pending refund | P; unit `collect_preconditions` (`ERR_IN_FLIGHT`), `withdraw_errors` (`ERR_IN_FLIGHT` during refund), `stray_callbacks_change_nothing` |
-| **V7** caps | `tvl ≤ tvl_cap` per token | P; unit `create_over_cap_is_refunded`, `top_up_rules`; sandbox `cap_exceeded_is_refunded` |
+| **V7** caps | `tvl ≤ tvl_cap` per token | P; unit `create_over_tvl_cap_is_refunded`, `top_up_rules`; sandbox `cap_exceeded_is_refunded` |
 | **V8** storage | payer lock count = open mandates = index entries; locks cover worst-case bytes | P; unit `storage_cost_covers_worst_case_mandate`, `storage_unregister_rules`, `exactly_funded_mandate_is_removed_when_exhausted`, `views_by_payer_and_next_collect`; sandbox `missing_storage_is_refunded`, `cancel_refunds_payer_directly` |
+| **V10** per-mandate cap (v1.3) | per mandate, balance + in-flight collect + in-flight refund ≤ the token's `mandate_cap`, and `amount_per_period ≤ mandate_cap` | P (`check`; amounts above the cap are generated, top-ups push mandates to the cap); unit `create_over_mandate_cap_is_refunded`, `top_up_respects_mandate_cap_including_in_flight`, `new_rejects_bad_config` (`mandate_cap > cap`); sandbox `mandate_cap_is_enforced` |
 | **V9** collect rule | `collect` succeeds iff preconditions hold, else the documented code in the documented order | P (`check_collect_rule` on every collect); unit `collect_preconditions`, `every_error_string_is_reachable` |
 
 ## Other properties worth an auditor's attention

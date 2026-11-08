@@ -125,7 +125,8 @@ fn new_stores_config() {
     assert_eq!(c.intents_account, acc(INTENTS));
     assert_eq!(c.mandate_storage_cost, U128(MCOST));
     let t = s.view(|v| v.get_token_tvl(acc(USDT))).unwrap();
-    assert_eq!((t.tvl, t.cap), (U128(0), U128(CAP)));
+    assert_eq!((t.tvl, t.cap, t.mandate_cap), (U128(0), U128(CAP), U128(MANDATE_CAP)));
+    assert_eq!(c.caps, default_config().tvl_caps);
     assert!(s.view(|v| v.get_token_tvl(acc(EVIL_TOKEN))).is_none());
 }
 
@@ -142,6 +143,7 @@ fn new_rejects_bad_config() {
         Box::new(|c| c.tvl_caps[1].token = acc(EVIL_TOKEN)),
         Box::new(|c| c.tvl_caps[1].token = acc(USDC)), // two caps for one token
         Box::new(|c| c.max_fee_bps = 10_001),
+        Box::new(|c| c.tvl_caps[0].mandate_cap = U128(CAP + 1)), // mandate cap above TVL cap
         Box::new(|c| c.fee_receiver = acc(VAULT)),
         Box::new(|c| c.intents_account = acc(VAULT)),
         Box::new(|c| {
@@ -243,7 +245,7 @@ fn storage_cost_covers_worst_case_mandate() {
     let token = long('t');
     let mut cfg = default_config();
     cfg.allowed_tokens = vec![acc(&token)];
-    cfg.tvl_caps = vec![TokenCap { token: acc(&token), cap: U128(CAP) }];
+    cfg.tvl_caps = vec![TokenCap { token: acc(&token), cap: U128(CAP), mandate_cap: U128(MANDATE_CAP) }];
     let mut s = Sim::with_config(cfg);
     let byte_cost = env::storage_byte_cost().as_yoctonear();
 
@@ -450,19 +452,60 @@ fn create_without_storage_is_refunded() {
 }
 
 #[test]
-fn create_over_cap_is_refunded() {
+fn create_over_tvl_cap_is_refunded() {
     let mut s = Sim::new();
-    s.register(ALICE, REG + 3 * MCOST);
+    s.register(ALICE, REG + 12 * MCOST);
     let msg = create_msg(MERCHANT, "intents_account", AMOUNT, 100).to_string();
-    assert_rejected(&mut s, USDC, ALICE, CAP + 1, &msg, ERR_CAP_EXCEEDED);
-    assert_rejected(&mut s, USDC, ALICE, u128::MAX, &msg, ERR_CAP_EXCEEDED);
-    assert_eq!(s.ft_on_transfer(USDC, ALICE, CAP - 5, &msg).result, Ok(0));
-    assert_rejected(&mut s, USDC, ALICE, 6, &msg, ERR_CAP_EXCEEDED);
-    assert_eq!(s.ft_on_transfer(USDC, ALICE, 5, &msg).result, Ok(0)); // exactly the cap
+    // Fill the TVL cap with full mandates (each at the per-mandate cap).
+    for _ in 0..(CAP / MANDATE_CAP - 1) {
+        assert_eq!(s.ft_on_transfer(USDC, ALICE, MANDATE_CAP, &msg).result, Ok(0));
+    }
+    assert_eq!(s.ft_on_transfer(USDC, ALICE, MANDATE_CAP - 5, &msg).result, Ok(0));
+    assert_rejected(&mut s, USDC, ALICE, 6, &msg, LOG_CAP_EXCEEDED_TVL);
+    assert_eq!(s.ft_on_transfer(USDC, ALICE, 5, &msg).result, Ok(0)); // exactly the TVL cap
     assert_eq!(s.tvl(USDC), CAP);
+    assert_rejected(&mut s, USDC, ALICE, 1, &msg, LOG_CAP_EXCEEDED_TVL);
     // Caps are per token.
-    s.register(ALICE, MCOST);
     assert_eq!(s.ft_on_transfer(USDT, ALICE, AMOUNT, &msg).result, Ok(0));
+}
+
+#[test]
+fn create_over_mandate_cap_is_refunded() {
+    let mut s = Sim::new();
+    s.register(ALICE, REG + 2 * MCOST);
+    let msg = create_msg(MERCHANT, "intents_account", AMOUNT, 100).to_string();
+    assert_rejected(&mut s, USDC, ALICE, MANDATE_CAP + 1, &msg, LOG_CAP_EXCEEDED_MANDATE);
+    assert_rejected(&mut s, USDC, ALICE, u128::MAX, &msg, LOG_CAP_EXCEEDED_MANDATE);
+    // amount_per_period above the mandate cap is rejected even if the funding fits.
+    let big = create_msg(MERCHANT, "intents_account", MANDATE_CAP + 1, 100).to_string();
+    assert_rejected(&mut s, USDC, ALICE, AMOUNT, &big, LOG_CAP_EXCEEDED_MANDATE);
+    // Exactly the cap is fine, for both.
+    let at_cap = create_msg(MERCHANT, "intents_account", MANDATE_CAP, 100).to_string();
+    assert_eq!(s.ft_on_transfer(USDC, ALICE, MANDATE_CAP, &at_cap).result, Ok(0));
+    assert_eq!(s.mandate(0).unwrap().balance, U128(MANDATE_CAP));
+    // The stable code is the text before ':'.
+    assert_eq!(errors::code_of(LOG_CAP_EXCEEDED_MANDATE), ERR_CAP_EXCEEDED);
+    assert_eq!(errors::code_of(LOG_CAP_EXCEEDED_TVL), ERR_CAP_EXCEEDED);
+    assert_eq!(errors::code_of(ERR_BAD_MSG), ERR_BAD_MSG);
+}
+
+#[test]
+fn top_up_respects_mandate_cap_including_in_flight() {
+    let mut s = Sim::new();
+    let id = s.create(ALICE, MANDATE_CAP - AMOUNT, &create_msg(MERCHANT, "intents_account", AMOUNT, 100));
+    let top = json!({"top_up": {"mandate_id": id}}).to_string();
+    assert_rejected(&mut s, USDC, ALICE, AMOUNT + 1, &top, LOG_CAP_EXCEEDED_MANDATE);
+    // While a collect is in flight its amount still counts (it may be credited back).
+    s.collect(id).unwrap();
+    assert_rejected(&mut s, USDC, ALICE, AMOUNT + 1, &top, LOG_CAP_EXCEEDED_MANDATE);
+    assert_eq!(s.ft_on_transfer(USDC, ALICE, AMOUNT, &top).result, Ok(0)); // exactly the cap
+    let m = s.mandate(id).unwrap();
+    assert_eq!(m.balance.0 + m.amount_per_period.0, MANDATE_CAP);
+    // A failed merchant leg credits back: still exactly at the cap, never above.
+    let (share, fee) = share_fee(AMOUNT, 100);
+    s.on_merchant_leg(id, share, fee, failed()).unwrap();
+    assert_eq!(s.mandate(id).unwrap().balance, U128(MANDATE_CAP));
+    assert_rejected(&mut s, USDC, ALICE, 1, &top, LOG_CAP_EXCEEDED_MANDATE);
 }
 
 #[test]
@@ -500,7 +543,7 @@ fn top_up_rules() {
     assert_rejected(&mut s, USDC, BOB, 5, &top, ERR_UNAUTHORIZED);
     assert_rejected(&mut s, USDC, MERCHANT, 5, &top, ERR_UNAUTHORIZED);
     assert_rejected(&mut s, USDT, ALICE, 5, &top, ERR_TOKEN_NOT_ALLOWED);
-    assert_rejected(&mut s, USDC, ALICE, CAP, &top, ERR_CAP_EXCEEDED);
+    assert_rejected(&mut s, USDC, ALICE, MANDATE_CAP, &top, LOG_CAP_EXCEEDED_MANDATE);
     assert_rejected(&mut s, USDC, ALICE, 5, r#"{"top_up":{"mandate_id":0,"x":1}}"#, ERR_BAD_MSG);
     assert_rejected(&mut s, USDC, ALICE, 5, r#"{"top_up":{"mandate_id":"0"}}"#, ERR_BAD_MSG);
     s.cancel(ALICE, id).unwrap();
@@ -1088,11 +1131,11 @@ fn every_error_string_is_reachable() {
             log(&mut s, USDC, ALICE, 1, &create_msg(MERCHANT, "intents_account", AMOUNT, 501).to_string()),
         ),
         (ERR_NO_STORAGE, log(&mut s, USDC, BOB, 1, &base)),
-        (ERR_CAP_EXCEEDED, log(&mut s, USDC, ALICE, CAP + 1, &base)),
+        (LOG_CAP_EXCEEDED_MANDATE, log(&mut s, USDC, ALICE, MANDATE_CAP + 1, &base)),
         (ERR_NOT_FOUND, log(&mut s, USDC, ALICE, 1, r#"{"top_up":{"mandate_id":9}}"#)),
     ] {
         assert_eq!(got, code);
-        seen.push(code);
+        seen.push(errors::code_of(code));
     }
     let id = s.create_default();
     let top = json!({"top_up": {"mandate_id": id}}).to_string();

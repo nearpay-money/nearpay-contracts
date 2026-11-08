@@ -13,6 +13,7 @@ pub const AMOUNT: u128 = 10_000_000; // 10 USDC (6 decimals) per period
 pub const FEE_BPS: u16 = 100;
 pub const MINTED: u128 = 1_000_000_000;
 pub const DEFAULT_CAP: u128 = 1_000_000_000_000;
+pub const DEFAULT_MANDATE_CAP: u128 = 100_000_000_000;
 /// Gas the keeper should attach to `collect` (LLD v1.2 §3.2).
 pub const COLLECT_GAS: Gas = Gas::from_tgas(150);
 
@@ -32,13 +33,19 @@ pub fn split(amount: u128, fee_bps: u16) -> (u128, u128) {
 
 pub struct Setup {
     pub cap: u128,
+    pub mandate_cap: u128,
     pub register_treasury: bool,
     pub register_merchant: bool,
 }
 
 impl Default for Setup {
     fn default() -> Self {
-        Setup { cap: DEFAULT_CAP, register_treasury: true, register_merchant: true }
+        Setup {
+            cap: DEFAULT_CAP,
+            mandate_cap: DEFAULT_MANDATE_CAP,
+            register_treasury: true,
+            register_merchant: true,
+        }
     }
 }
 
@@ -99,6 +106,11 @@ pub fn vault_events(res: &ExecutionFinalResult) -> Vec<Value> {
     events(res, "nearpay_vault")
 }
 
+/// `true` if some log line is a rejection with this stable code (text before `:`).
+pub fn has_code(res: &ExecutionFinalResult, code: &str) -> bool {
+    res.logs().iter().any(|l| l.split(':').next() == Some(code))
+}
+
 pub fn names(evs: &[Value]) -> Vec<String> {
     evs.iter().map(|e| e["event"].as_str().unwrap_or_default().to_string()).collect()
 }
@@ -152,7 +164,7 @@ pub async fn setup(opts: Setup) -> Result<Ctx> {
             "allowed_tokens": [ft.id()],
             "fee_receiver": treasury.id(),
             "max_fee_bps": 500,
-            "tvl_caps": [{"token": ft.id(), "cap": opts.cap.to_string()}],
+            "tvl_caps": [{"token": ft.id(), "cap": opts.cap.to_string(), "mandate_cap": opts.mandate_cap.min(opts.cap).to_string()}],
             "intents_account": intents.id(),
         }))
         .transact()

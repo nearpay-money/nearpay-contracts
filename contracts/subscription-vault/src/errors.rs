@@ -19,8 +19,14 @@ pub const ERR_UNAUTHORIZED: &str = "ERR_UNAUTHORIZED";
 pub const ERR_TOKEN_NOT_ALLOWED: &str = "ERR_TOKEN_NOT_ALLOWED";
 /// `msg` does not parse or fails validation.
 pub const ERR_BAD_MSG: &str = "ERR_BAD_MSG";
-/// Deposit would take the token's TVL above its cap.
+/// Deposit would take the token's TVL above its cap, or a mandate's balance (or its
+/// `amount_per_period`) above the token's per-mandate cap. The `ft_on_transfer` log line adds
+/// which cap after the code (`LOG_CAP_EXCEEDED_*`).
 pub const ERR_CAP_EXCEEDED: &str = "ERR_CAP_EXCEEDED";
+/// Log line: per-mandate cap (LLD v1.3).
+pub const LOG_CAP_EXCEEDED_MANDATE: &str = "ERR_CAP_EXCEEDED: mandate";
+/// Log line: per-token TVL cap (LLD v1.3).
+pub const LOG_CAP_EXCEEDED_TVL: &str = "ERR_CAP_EXCEEDED: tvl";
 /// `fee_bps > max_fee_bps`.
 pub const ERR_FEE_TOO_HIGH: &str = "ERR_FEE_TOO_HIGH";
 /// Payer has no NEP-145 storage balance, or not enough available for one more mandate.
@@ -34,6 +40,12 @@ pub const ERR_STILL_ACTIVE: &str = "ERR_STILL_ACTIVE";
 pub const ERR_OPEN_MANDATES: &str = "ERR_OPEN_MANDATES";
 /// Invalid constructor arguments (deploy time only).
 pub const ERR_BAD_CONFIG: &str = "ERR_BAD_CONFIG";
+
+/// The stable code of a rejection log line: the text before the first `:` (LLD v1.3 §3.1 —
+/// consumers match the leading code; anything after `": "` is detail).
+pub fn code_of(line: &str) -> &str {
+    line.split(':').next().unwrap_or(line)
+}
 
 /// Every error string the contract can emit, for tests and the audit index.
 pub const ALL: [&str; 15] = [

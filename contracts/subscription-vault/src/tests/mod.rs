@@ -32,7 +32,8 @@ pub const MALLORY: &str = "mallory.test";
 
 pub const T0: u64 = 1_731_000_000_000_000_000; // ns
 pub const DAY_NS: u64 = 86_400 * 1_000_000_000;
-pub const CAP: u128 = 1_000_000_000_000; // 1M USDC (6 decimals)
+pub const CAP: u128 = 1_000_000_000_000; // 1M USDC (6 decimals) TVL cap per token
+pub const MANDATE_CAP: u128 = 100_000_000_000; // 100k USDC per mandate
 pub const MAX_FEE_BPS: u16 = 500;
 pub const AMOUNT: u128 = 10_000_000; // 10 USDC per period
 pub const MILLINEAR: u128 = 1_000_000_000_000_000_000_000;
@@ -61,8 +62,8 @@ pub fn default_config() -> Config {
         fee_receiver: acc(TREASURY),
         max_fee_bps: MAX_FEE_BPS,
         tvl_caps: vec![
-            TokenCap { token: acc(USDC), cap: U128(CAP) },
-            TokenCap { token: acc(USDT), cap: U128(CAP) },
+            TokenCap { token: acc(USDC), cap: U128(CAP), mandate_cap: U128(MANDATE_CAP) },
+            TokenCap { token: acc(USDT), cap: U128(CAP), mandate_cap: U128(MANDATE_CAP) },
         ],
         intents_account: acc(INTENTS),
     }
