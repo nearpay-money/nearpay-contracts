@@ -519,7 +519,7 @@ impl Vault {
 
     /// When the next period becomes collectable (ns), for an active mandate below `max_periods`.
     pub fn next_collect_at(&self, mandate_id: u64) -> Option<U64> {
-        self.mandates.get(&mandate_id).and_then(next_collect_at)
+        self.mandates.get(&mandate_id).and_then(mandate_next_collect_at)
     }
 
     pub fn get_config(&self) -> ConfigView {
@@ -815,7 +815,7 @@ fn merchant_leg_delivered(kind: ReceiverKind, share: u128) -> u128 {
     }
 }
 
-fn next_collect_at(m: &Mandate) -> Option<U64> {
+fn mandate_next_collect_at(m: &Mandate) -> Option<U64> {
     if m.status != Status::Active || m.max_reached() {
         return None;
     }
@@ -840,6 +840,6 @@ fn view(mandate_id: u64, m: &Mandate) -> MandateView {
         in_flight: m.in_flight,
         refund_in_flight: U128(m.refund_in_flight),
         ext_ref: m.ext_ref.clone(),
-        next_collect_at: next_collect_at(m),
+        next_collect_at: mandate_next_collect_at(m),
     }
 }
