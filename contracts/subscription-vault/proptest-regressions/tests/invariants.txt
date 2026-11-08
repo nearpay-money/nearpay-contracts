@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 20fc00a8afca6eb28eaab5c28c93ee93f17925cd117a1180e0c2a506f6379989 # shrinks to ops = [Create { payer: 0, merchant: 0, token: 0, intents: false, amount_idx: 1, periods_funded: 0, extra: 7, fee_bps: 1, max_periods: None, start_days: 0, daily: false, register: true }, Withdraw { payer: false, mandate: 0 }, Withdraw { payer: false, mandate: 0 }, Collect { mandate: 0 }, Deliver { pending: 0, leg: Full, ok: false }]

@@ -6,3 +6,8 @@ target/
 .DS_Store
 .idea/
 .vscode/
+fuzz/target/
+fuzz/artifacts/
+fuzz/coverage/
+res/
+res-*/

@@ -1,0 +1,1 @@
+{"create_mandate":{"merchant_receiver":"m.near","receiver_kind":"intents_account","amount_per_period":"10000000","period_secs":2592000,"start_at":"1731000000000000000","max_periods":12,"fee_bps":100,"ext_ref":"sub_123"}}

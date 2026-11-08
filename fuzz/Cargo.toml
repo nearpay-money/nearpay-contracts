@@ -1,0 +1,27 @@
+# cargo-fuzz target for `ft_on_transfer` msg parsing (LLD contracts-vault §7). Needs nightly:
+#   cargo +nightly fuzz run parse_msg -- -max_total_time=120
+# Kept out of the main workspace (see ../Cargo.toml `exclude`).
+[package]
+name = "subscription-vault-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+subscription-vault = { path = "../contracts/subscription-vault" }
+# Native builds of near-sdk need a host implementation; the mocked one is enough here.
+near-sdk = { version = "=5.30.1", features = ["unit-testing"] }
+
+[[bin]]
+name = "parse_msg"
+path = "fuzz_targets/parse_msg.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

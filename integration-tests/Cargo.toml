@@ -1,0 +1,16 @@
+[package]
+name = "integration-tests"
+description = "near-workspaces sandbox tests for the subscription vault (mock NEP-141 + mock intents.near)"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Tests only; they read the wasm built by scripts/build.sh (NEARPAY_WASM_DIR, default ../res).
+[dev-dependencies]
+near-workspaces = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
