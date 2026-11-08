@@ -1,0 +1,185 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash # bash -eo pipefail
+
+env:
+  RUST_VERSION: "1.97.0"
+  CARGO_NEAR_VERSION: "0.23.0"
+  CARGO_FUZZ_VERSION: "0.13.2"
+  FUZZ_NIGHTLY: "nightly-2026-11-01"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
+          rustup default "$RUST_VERSION"
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        env:
+          # Linting does not need the near-workspaces sandbox binary.
+          NEAR_SANDBOX_BIN_PATH: /nonexistent
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  unit:
+    name: unit + proptest + parser fuzz (native)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: cargo test (subscription-vault)
+        env:
+          PROPTEST_CASES: "256"
+        run: cargo test -p subscription-vault --locked -- --test-threads=4
+
+  wasm:
+    name: build wasm (cargo-near)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_VERSION }} + wasm32
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+      - name: System packages for cargo-near
+        run: sudo apt-get update -q && sudo apt-get install -yq libudev-dev pkg-config
+      - name: Cache cargo-near
+        id: cache-cargo-near
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-near
+          key: cargo-near-${{ env.CARGO_NEAR_VERSION }}-rust-${{ env.RUST_VERSION }}-${{ runner.os }}
+      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
+        if: steps.cache-cargo-near.outputs.cache-hit != 'true'
+        run: cargo install cargo-near --version "$CARGO_NEAR_VERSION" --locked
+      - name: Build contracts
+        run: scripts/build.sh
+      - name: Sizes and hashes
+        run: |
+          {
+            echo "### wasm (non-reproducible, for tests)"
+            echo '```'
+            ls -l res/*.wasm
+            cat res/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: res/
+          if-no-files-found: error
+
+  integration:
+    name: near-workspaces integration + gas profile
+    needs: wasm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: res
+      - name: cargo test (integration-tests)
+        env:
+          NEARPAY_WASM_DIR: ${{ github.workspace }}/res
+        run: cargo test -p integration-tests --locked -- --nocapture --test-threads=4 2>&1 | tee integration.log
+      - name: Gas profile
+        if: always()
+        run: |
+          {
+            echo "### Gas profile (target: collect ≤ 60 Tgas burnt)"
+            echo '```'
+            grep '^GAS' integration.log || echo "no gas lines (tests did not reach the profile)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  reproducible:
+    name: reproducible vault wasm (Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_VERSION }} + wasm32
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+      - name: System packages for cargo-near
+        run: sudo apt-get update -q && sudo apt-get install -yq libudev-dev pkg-config
+      - name: Cache cargo-near
+        id: cache-cargo-near
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-near
+          key: cargo-near-${{ env.CARGO_NEAR_VERSION }}-rust-${{ env.RUST_VERSION }}-${{ runner.os }}
+      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
+        if: steps.cache-cargo-near.outputs.cache-hit != 'true'
+        run: cargo install cargo-near --version "$CARGO_NEAR_VERSION" --locked
+      - name: Reproducible build
+        env:
+          NEARPAY_WASM_DIR: ${{ github.workspace }}/res-reproducible
+        run: scripts/build.sh --reproducible
+      - name: Hash
+        run: |
+          {
+            echo "### Reproducible vault wasm (publish this hash; LLD §6)"
+            echo '```'
+            ls -l res-reproducible/*.wasm
+            cat res-reproducible/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vault-reproducible
+          path: res-reproducible/
+          if-no-files-found: error
+
+  fuzz:
+    name: cargo-fuzz (msg parser)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ${{ env.FUZZ_NIGHTLY }} + cargo-fuzz ${{ env.CARGO_FUZZ_VERSION }}
+        run: |
+          rustup toolchain install "$FUZZ_NIGHTLY" --profile minimal
+          cargo +"$FUZZ_NIGHTLY" install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+      - name: Fuzz parse_msg (180 s)
+        run: cargo +"$FUZZ_NIGHTLY" fuzz run --sanitizer none parse_msg -- -max_total_time=180 -max_len=4096
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
