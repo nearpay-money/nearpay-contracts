@@ -12,7 +12,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [package.metadata.near.reproducible_build]
-# Image from the cargo-near 0.23.0 project template; it is identified by the digest, the tag is descriptive.
+# Image referenced by the cargo-near 0.23.0 project template (cargo-near 0.22.0, Rust 1.99.1); it is
+# identified by the digest, the tag is descriptive. CI builds the mocks with the same versions
+# and runs the sandbox tests against this reproducible vault wasm.
 image = "sourcescan/cargo-near:0.22.0-rust-1.99.1"
 image_digest = "sha256:c9655eaf7436b90c87ea8b25739f91063032c5c30ba24cfeafe72c142943b5bb"
 passed_env = []

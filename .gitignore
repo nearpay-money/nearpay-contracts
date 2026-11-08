@@ -9,5 +9,5 @@ target/
 fuzz/target/
 fuzz/artifacts/
 fuzz/coverage/
-fuzz/Cargo.lock
 res/
+res-*/

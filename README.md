@@ -17,7 +17,7 @@ This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain
 
 - `nearpay-brain/lld/contracts-vault.md` — **low-level design (dev-ready; implement from this)**
 - `nearpay-brain/lld/audits/contracts-vault.md` — LLD audit findings already folded into the LLD
-- [`audits/README.md`](audits/README.md) — invariants V1–V9 and the tests that cover each
+- [`audits/README.md`](audits/README.md) — invariants V1–V10 and the tests that cover each
 - `nearpay-brain/roadmap/development-plan.md` — stage and step this repo is built in
 - `nearpay-brain/architecture/hld.md` — system design
 - `nearpay-brain/architecture/repositories.md` — repo topology and dependency rules
@@ -43,15 +43,15 @@ nearpay-contracts/
 ```bash
 cargo test -p subscription-vault                      # unit + proptest + native parser fuzz
 cargo clippy --workspace --all-targets -- -D warnings # NEAR_SANDBOX_BIN_PATH=/nonexistent skips the sandbox download
-scripts/build.sh                                      # needs cargo-near 0.23.0 + wasm32-unknown-unknown
-cargo test -p integration-tests -- --nocapture        # needs res/*.wasm from build.sh and the sandbox binary
+scripts/build.sh                                      # needs cargo-near 0.22.0 + Rust 1.99.1 + wasm32-unknown-unknown
+cargo test -p integration-tests -- --nocapture        # needs res/*.wasm (CI: reproducible vault + mocks) and the sandbox binary
 scripts/build.sh --reproducible                       # Docker; the deployable vault wasm and its hash
 ```
 `PROPTEST_CASES` scales the property tests (CI: 256).
 
 ## Status
 
-Stage 4 step 4.1: subscription vault implemented per LLD v1.3 with unit, property, fuzz and sandbox tests; awaiting CI and the independent AI-agent audits (ADR-0020). Not deployed.
+Stage 4 step 4.1: subscription vault implemented per LLD v1.4 (AI audits 2026-11-08 folded in: `audits/2026-11-08-ai-audits.md`) with unit, property, fuzz and sandbox tests; awaiting CI and the independent AI-agent audits (ADR-0020). Not deployed.
 
 ## Built with
 
@@ -62,5 +62,5 @@ Libraries are listed here as they are added (hackathon rule Q-005). Code and doc
 - [`near-workspaces`](https://crates.io/crates/near-workspaces) 0.24.0 — sandbox integration tests
 - [`proptest`](https://crates.io/crates/proptest) 1.12.0 — property tests and native fuzzing
 - [`libfuzzer-sys`](https://crates.io/crates/libfuzzer-sys) 0.4.13 / [`cargo-fuzz`](https://crates.io/crates/cargo-fuzz) 0.13.2 — coverage-guided fuzzing
-- [`cargo-near`](https://crates.io/crates/cargo-near) 0.23.0 — wasm and reproducible builds
+- [`cargo-near`](https://crates.io/crates/cargo-near) 0.22.0 (+ image `sourcescan/cargo-near:0.22.0-rust-1.99.1`) — wasm and reproducible builds
 - `tokio`, `serde_json`, `anyhow` — integration-test plumbing

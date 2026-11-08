@@ -8,7 +8,8 @@
 #                                    # committed tree) — this is the wasm whose hash is published
 #                                    # and deployed (LLD contracts-vault §6)
 #
-# Requires: cargo-near 0.23.0, rustup target wasm32-unknown-unknown (and Docker for --reproducible).
+# Requires: cargo-near 0.22.0 and Rust 1.99.1 with wasm32-unknown-unknown (the reproducible image's
+# versions; CI uses the same), and Docker for --reproducible.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

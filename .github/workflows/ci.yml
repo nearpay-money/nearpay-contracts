@@ -17,8 +17,12 @@ defaults:
     shell: bash # bash -eo pipefail
 
 env:
+  # Native lint/unit toolchain (the version these were verified with).
   RUST_VERSION: "1.97.0"
-  CARGO_NEAR_VERSION: "0.23.0"
+  # Wasm toolchain = the reproducible image's (sourcescan/cargo-near:0.22.0-rust-1.99.1 in
+  # contracts/subscription-vault/Cargo.toml), so mocks and vault are built like the deployed wasm.
+  RUST_WASM_VERSION: "1.99.1"
+  CARGO_NEAR_VERSION: "0.22.0"
   CARGO_FUZZ_VERSION: "0.13.2"
   FUZZ_NIGHTLY: "nightly-2026-11-01"
   CARGO_TERM_COLOR: always
@@ -60,32 +64,25 @@ jobs:
         run: cargo test -p subscription-vault --locked -- --test-threads=4
 
   wasm:
-    name: build wasm (cargo-near)
+    name: build wasm (cargo-near, non-reproducible; mocks for the sandbox tests)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.RUST_VERSION }} + wasm32
+      - name: Install Rust ${{ env.RUST_WASM_VERSION }} + wasm32
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
-          rustup default "$RUST_VERSION"
+          rustup toolchain install "$RUST_WASM_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_WASM_VERSION"
       - name: System packages for cargo-near
         run: sudo apt-get update -q && sudo apt-get install -yq libudev-dev pkg-config
-      - name: Cache cargo-near
-        id: cache-cargo-near
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-near
-          key: cargo-near-${{ env.CARGO_NEAR_VERSION }}-rust-${{ env.RUST_VERSION }}-${{ runner.os }}
-      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
-        if: steps.cache-cargo-near.outputs.cache-hit != 'true'
+      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }} (pinned, --locked, no cache)
         run: cargo install cargo-near --version "$CARGO_NEAR_VERSION" --locked
       - name: Build contracts
         run: scripts/build.sh
       - name: Sizes and hashes
         run: |
           {
-            echo "### wasm (non-reproducible, for tests)"
+            echo "### wasm (non-reproducible; the sandbox tests use the reproducible vault)"
             echo '```'
             ls -l res/*.wasm
             cat res/SHA256SUMS
@@ -98,8 +95,8 @@ jobs:
           if-no-files-found: error
 
   integration:
-    name: near-workspaces integration + gas profile
-    needs: wasm
+    name: near-workspaces integration + gas profile (reproducible vault wasm)
+    needs: [wasm, reproducible]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -112,52 +109,71 @@ jobs:
         with:
           name: wasm
           path: res
+      - uses: actions/download-artifact@v4
+        with:
+          name: vault-reproducible
+          path: res-reproducible
+      - name: Test the deployable vault bytes (M-7)
+        run: |
+          cp res-reproducible/subscription_vault.wasm res/subscription_vault.wasm
+          (cd res-reproducible && sha256sum -c SHA256SUMS)
+          echo "vault under test: $(sha256sum res/subscription_vault.wasm)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: cargo test (integration-tests)
         env:
           NEARPAY_WASM_DIR: ${{ github.workspace }}/res
         run: cargo test -p integration-tests --locked -- --nocapture --test-threads=4 2>&1 | tee integration.log
+      - name: near-sandbox binary checksum
+        if: always()
+        env:
+          EXPECTED: ${{ vars.NEAR_SANDBOX_SHA256 }}
+        run: |
+          bins=$(find "$HOME" target -type f -name 'near-sandbox*' -perm -u+x 2>/dev/null | grep -v '\.d$' || true)
+          for b in $bins; do sha256sum "$b"; done | tee sandbox.sha256
+          echo "near-sandbox: $(cat sandbox.sha256)" >> "$GITHUB_STEP_SUMMARY"
+          # Pin by setting the repository variable NEAR_SANDBOX_SHA256 to the hash printed here.
+          if [[ -n "$EXPECTED" ]]; then grep -q "^$EXPECTED " sandbox.sha256; fi
       - name: Gas profile
         if: always()
         run: |
           {
-            echo "### Gas profile (target: collect ≤ 60 Tgas burnt)"
+            echo "### Gas profile (target: collect ≤ 60 Tgas burnt excluding the receiver)"
             echo '```'
             grep '^GAS' integration.log || echo "no gas lines (tests did not reach the profile)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   reproducible:
-    name: reproducible vault wasm (Docker)
+    name: reproducible vault wasm (Docker, built twice)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.RUST_VERSION }} + wasm32
+      - name: Install Rust ${{ env.RUST_WASM_VERSION }} + wasm32
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown
-          rustup default "$RUST_VERSION"
+          rustup toolchain install "$RUST_WASM_VERSION" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_WASM_VERSION"
       - name: System packages for cargo-near
         run: sudo apt-get update -q && sudo apt-get install -yq libudev-dev pkg-config
-      - name: Cache cargo-near
-        id: cache-cargo-near
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-near
-          key: cargo-near-${{ env.CARGO_NEAR_VERSION }}-rust-${{ env.RUST_VERSION }}-${{ runner.os }}
-      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
-        if: steps.cache-cargo-near.outputs.cache-hit != 'true'
+      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }} (pinned, --locked, no cache)
         run: cargo install cargo-near --version "$CARGO_NEAR_VERSION" --locked
-      - name: Reproducible build
+      - name: Reproducible build 1
         env:
           NEARPAY_WASM_DIR: ${{ github.workspace }}/res-reproducible
         run: scripts/build.sh --reproducible
+      - name: Reproducible build 2 (must match)
+        env:
+          NEARPAY_WASM_DIR: ${{ runner.temp }}/res-reproducible-2
+        run: |
+          scripts/build.sh --reproducible
+          diff res-reproducible/SHA256SUMS "$NEARPAY_WASM_DIR/SHA256SUMS"
       - name: Hash
         run: |
           {
-            echo "### Reproducible vault wasm (publish this hash; LLD §6)"
+            echo "### Reproducible vault wasm (publish this hash with the CI run id; LLD §6)"
             echo '```'
             ls -l res-reproducible/*.wasm
             cat res-reproducible/SHA256SUMS
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
@@ -178,6 +194,8 @@ jobs:
           cargo +"$FUZZ_NIGHTLY" install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
       - name: Fuzz parse_msg (180 s)
         run: cargo +"$FUZZ_NIGHTLY" fuzz run --sanitizer none parse_msg -- -max_total_time=180 -max_len=4096
+      - name: fuzz/Cargo.lock unchanged (committed dependency set)
+        run: git diff --exit-code fuzz/Cargo.lock
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
