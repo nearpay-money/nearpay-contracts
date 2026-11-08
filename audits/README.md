@@ -2,17 +2,19 @@
 
 This folder is for the **independent AI-agent audits** (ADR-0020 decision 6): each audit is a
 separate agent run that did not write the contract, works against
-`nearpay-brain/lld/contracts-vault.md` (v1.3) V1–V10 and threat T-10, and records every finding
+`nearpay-brain/lld/contracts-vault.md` (v1.4) V1–V10 and threat T-10, and records every finding
 with its fix or an accepted-risk note. Audit reports go here as `YYYY-MM-DD-<auditor>.md`.
 Nothing in this file is an audit verdict.
+
+**Audits so far:** [`2026-11-08-ai-audits.md`](2026-11-08-ai-audits.md) — two AI audits, findings → fixes / accepted risks.
 
 ## Scope
 
 | Item | Path |
 |---|---|
 | Contract | `contracts/subscription-vault/src/` (`lib.rs` methods and callbacks, `msg.rs` parsing/validation, `math.rs` arithmetic, `events.rs`, `errors.rs`, `types.rs`) |
-| Unit / property / native fuzz tests | `contracts/subscription-vault/src/tests/` (`unit.rs`, `invariants.rs`, `msg_fuzz.rs`; harness in `mod.rs`) and `src/math.rs` (`mod tests`) |
-| Sandbox tests + gas profile | `integration-tests/tests/` (`vault_flows.rs`, `gas_profile.rs`) against `contracts/mocks/` |
+| Unit / property / native fuzz tests | `contracts/subscription-vault/src/tests/` (`unit.rs`, `invariants.rs`, `msg_fuzz.rs`, `audit_fixes.rs`; harness in `mod.rs`) and `src/math.rs` (`mod tests`) |
+| Sandbox tests + gas profile | `integration-tests/tests/` (`vault_flows.rs`, `min_gas.rs`, `gas_profile.rs`) against `contracts/mocks/` |
 | cargo-fuzz target | `fuzz/fuzz_targets/parse_msg.rs` |
 | Build / CI | `scripts/build.sh`, `.github/workflows/ci.yml`, `[package.metadata.near.reproducible_build]` in `contracts/subscription-vault/Cargo.toml` |
 
@@ -47,15 +49,18 @@ a token-ledger model, followed by a drain) and the fixed schedule
 | Parser accepts exactly the schema | `msg_fuzz::parse_matches_oracle` (independent oracle), `parse_never_panics_*`, `duplicate_and_case_variants_are_rejected`; cargo-fuzz `parse_msg` (CI) |
 | Callbacks are private, init once, collect non-payable, cancel/withdraw need 1 yocto | unit `callbacks_are_private`; sandbox `entry_point_guards` (wasm entry-point guards) |
 | Stable error strings and event wire format | unit `constants_match_lld`, `event_wire_format_is_exact`, exact-log assertions in `create_mandate_happy_path`, `top_up_rules`, `collect_success_with_fee`, `collect_merchant_leg_failure_restores_balance`, `cancel_by_payer_refunds_and_closes`, `cancel_refund_failure_leaves_balance_for_withdraw`; `every_error_string_is_reachable` |
-| Gas | sandbox `gas_profile` (burnt gas per method; `collect` ≤ 60 Tgas burnt; minimum attached gas) |
+| Gas | sandbox `gas_profile` (burnt gas per method; `collect` ≤ 60 Tgas burnt excluding the receiver); `min_gas.rs` (every path at the minimum accepted gas, callbacks succeed, flags cleared); unit `audit_fixes::collect_gas_floor_and_static_budgets` |
+| Only directly signed deposits fund mandates (no relayed `sender_id = intents_account`) | unit `audit_fixes::relayed_deposit_from_intents_account_is_refunded`; sandbox `deposit_relayed_by_intents_account_is_refunded` |
+| Input bounds (int4/JS-safe numbers) | unit `audit_fixes::inputs_are_bounded`; `msg_fuzz` (`assert_validated`); cargo-fuzz |
+| Callback failure is unrecoverable (documented state) | unit `audit_fixes::failed_collect_callback_leaves_the_period_stuck`, `failed_refund_callback_blocks_withdraw_forever` |
 
 ## Known limits of the test setup
 
 - Locally only native unit/property tests run; wasm builds, sandbox tests, the gas profile, the
   reproducible build and cargo-fuzz run in CI only.
-- The mock token is near-contract-standards 5.30 plus the deployed tokens' `> 30 Tgas` rule; the
-  mock intents receiver is not `intents.near`. Real USDC/USDT and `intents.near` gas use is not
-  measured before mainnet.
+- The mock token forwards gas like near-contract-standards 4.x (`prepaid − 30 Tgas`) and the mock
+  intents receiver burns 30 Tgas per deposit, but neither is the real contract. Real USDC/USDT and
+  `intents.near` gas use is not measured before mainnet (see the 2026-11-08 audit record).
 - Unit tests call the Rust methods directly, so near-sdk's generated guards (`#[private]`,
   `#[payable]`, init-once) are covered only by the sandbox tests; the method bodies repeat the
   private check as defence in depth.
