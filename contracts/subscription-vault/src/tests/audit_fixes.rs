@@ -308,3 +308,45 @@ fn exits_need_min_exit_gas() {
     s.withdraw(ALICE, id).unwrap();
     assert_eq!(s.mandate(id).unwrap().refund_in_flight, U128(3 * AMOUNT));
 }
+
+// ------------------------------------------------------------------ re-check 2 (R-1)
+
+const RELAYER: &str = "relayer.test";
+
+/// R-1 (PoC `poc_meta_tx_deposit_is_refused`): in a NEP-366 meta-transaction the inner receipt's
+/// predecessor is the delegating user but `signer_account_id` is the relayer (nearcore
+/// `apply_delegate_action`), so the token reports `sender_id = alice` while the signer is the
+/// relayer. The signer rule refuses it: gasless/relayer wallets cannot fund mandates in v1.
+#[test]
+fn meta_tx_deposit_is_refused() {
+    let mut s = Sim::new();
+    s.register(ALICE, REG + MCOST);
+    let msg = create_msg(MERCHANT, "intents_account", AMOUNT, 100).to_string();
+    let o = s.ft_on_transfer_signed(USDC, ALICE, RELAYER, 3 * AMOUNT, &msg);
+    assert_eq!(o.result, Ok(3 * AMOUNT));
+    assert_eq!(o.logs, vec![ERR_UNSUPPORTED_SENDER.to_string()]);
+    // Top-ups through a relayer are refused the same way.
+    let id = s.create_default();
+    let top = json!({"top_up": {"mandate_id": id}}).to_string();
+    let o = s.ft_on_transfer_signed(USDC, ALICE, RELAYER, AMOUNT, &top);
+    assert_eq!((o.result, o.logs), (Ok(AMOUNT), vec![ERR_UNSUPPORTED_SENDER.to_string()]));
+}
+
+/// R-1 (probe `probe_meta_tx_cancel_still_works`): exits via meta-transaction work, because
+/// `cancel`/`withdraw` authorise the predecessor, not the signer.
+#[test]
+fn meta_tx_exits_still_work() {
+    let mut s = Sim::new();
+    let id = s.create_default();
+    let o = s.call_signed(ALICE, RELAYER, 1, vec![], move |v| {
+        let _ = v.cancel(id);
+    });
+    assert!(o.result.is_ok());
+    assert_eq!(s.mandate(id).unwrap().status, Status::Canceled);
+    s.on_refunded(id, 3 * AMOUNT, Some(ALICE), failed()).unwrap();
+    let o = s.call_signed(ALICE, RELAYER, 1, vec![], move |v| {
+        let _ = v.withdraw(id);
+    });
+    assert!(o.result.is_ok());
+    assert_eq!(s.mandate(id).unwrap().refund_in_flight, U128(3 * AMOUNT));
+}

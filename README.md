@@ -53,9 +53,9 @@ scripts/build.sh --reproducible                       # Docker; the deployable v
 
 | Method | Who | Attach |
 |---|---|---|
-| `ft_transfer_call(vault, amount, msg)` on the token | the payer, **signing directly** (the payer must be the transaction signer; deposits relayed by a contract — intents.near, bridges, routers, smart wallets — are refunded with `ERR_UNSUPPORTED_SENDER`) | 1 yoctoNEAR, ≥ 100 Tgas |
+| `ft_transfer_call(vault, amount, msg)` on the token | the payer, **signing the transaction from their own account** (the payer must be the transaction signer; deposits relayed by a contract — intents.near, bridges, routers, smart wallets — and NEP-366 meta-transactions through a relayer/gasless wallet are refunded with `ERR_UNSUPPORTED_SENDER`) | 1 yoctoNEAR, ≥ 100 Tgas |
 | `collect(mandate_id)` | anyone (the billing keeper) | **250 Tgas** (minimum 170 Tgas, else `ERR_GAS`; unused gas is refunded) |
-| `cancel(mandate_id)` / `withdraw(mandate_id)` | payer (cancel: or merchant) | 1 yoctoNEAR and **≥ 50 Tgas, 100 recommended** — many tools default to 30 Tgas, which fails with `ERR_GAS` |
+| `cancel(mandate_id)` / `withdraw(mandate_id)` | payer (cancel: or merchant); also via meta-transaction | 1 yoctoNEAR and **≥ 50 Tgas, 100 recommended** — many tools default to 30 Tgas, which fails with `ERR_GAS` |
 
 Details: `nearpay-brain/lld/contracts-vault.md` §3.1, §3.3, §3.4.
 

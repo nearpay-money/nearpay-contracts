@@ -200,12 +200,15 @@ impl Vault {
             || sender_id != env::signer_account_id()
         {
             // The payer must be the account that signed the transaction (a direct
-            // `ft_transfer_call`, or a NEP-366 meta-transaction whose inner signer is the user), so
-            // the payer can always cancel and refunds reach a human. A deposit relayed by any
-            // contract — intents.near (Intents `ft_withdraw` with msg, 1Click
-            // `customRecipientMsg`), a bridge, a router, a smart wallet — would make the relayer
-            // the payer (AI audits A1-M-2, A2-M-1, re-audit N-1). The intents check is subsumed by
-            // the signer check but kept explicit. Smart-wallet payers are unsupported in v1.
+            // `ft_transfer_call` signed by the payer), so the payer can always cancel and refunds
+            // reach a human. A deposit relayed by any contract — intents.near (Intents
+            // `ft_withdraw` with msg, 1Click `customRecipientMsg`), a bridge, a router, a smart
+            // wallet — would make the relayer the payer (AI audits A1-M-2, A2-M-1, re-audit N-1).
+            // NEP-366 meta-transaction deposits are refused too: their inner receipt's signer is
+            // the relayer, not the user, so gasless/relayer wallets cannot fund or top up in v1
+            // (cancel/withdraw via meta-tx still work: they check the predecessor). The intents
+            // check is subsumed by the signer check but kept explicit. Smart-wallet payers are
+            // unsupported in v1.
             Err(ERR_UNSUPPORTED_SENDER)
         } else if amount.0 == 0 {
             Err(ERR_BAD_MSG)

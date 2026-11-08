@@ -173,13 +173,8 @@ jobs:
           diff res-reproducible/SHA256SUMS "$NEARPAY_WASM_DIR/SHA256SUMS"
       - name: Hash
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            label="DEPLOYABLE — push run on main (record this hash with this run URL; LLD §6)"
-          else
-            label="NOT a deploy hash — ${GITHUB_EVENT_NAME} run (deploy only from a push run on main)"
-          fi
           {
-            echo "### Reproducible vault wasm: ${label}"
+            echo "### Reproducible vault wasm (candidate — deployable only if the final 'deployable' job of a push run on main prints it; LLD §6)"
             echo '```'
             ls -l res-reproducible/*.wasm
             cat res-reproducible/SHA256SUMS
@@ -214,3 +209,27 @@ jobs:
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts/
+
+  deployable:
+    name: deployable hash (push to main, every job green)
+    # Runs only on push to main and only when every other job succeeded (implicit success()).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, unit, wasm, integration, reproducible, fuzz]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: vault-reproducible
+          path: res-reproducible
+      - name: Publish the deployable hash
+        run: |
+          (cd res-reproducible && sha256sum -c SHA256SUMS)
+          {
+            echo "### DEPLOYABLE vault wasm (LLD §6: deploy only this, from a run whose conclusion is success)"
+            echo '```'
+            cat res-reproducible/SHA256SUMS
+            echo "commit: ${GITHUB_SHA}"
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
