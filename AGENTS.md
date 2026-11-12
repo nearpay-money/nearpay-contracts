@@ -1,6 +1,6 @@
 # AGENTS.md — nearpay-contracts
 
-You are working in **nearpay-contracts**, one of 27 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
+You are working in **nearpay-contracts**, one of 26 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
 Scope: NEAR smart contracts. v1: subscription-vault (payer-funded, payer-cancellable mandates; permissionless collect).
 
 ## Before changing anything
